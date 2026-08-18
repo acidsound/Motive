@@ -78,7 +78,15 @@ func (w *Workspace) List(name string) (string, error) {
 func (w *Workspace) Search(query string) (string, error) {
 	if query == "" { return "", fmt.Errorf("query is required") }
 	if _, err := exec.LookPath("rg"); err == nil {
-		return w.command(30*time.Second, "rg", "-n", "--hidden", "--glob", "!.git", "--glob", "!node_modules", query, ".")
+		out, err := w.command(30*time.Second, "rg", "-n", "--hidden", "--glob", "!.git", "--glob", "!node_modules", query, ".")
+		if err != nil {
+			// rg exits 1 when no files match; that is an empty result, not a failure.
+			if strings.Contains(err.Error(), "exit status 1") {
+				return "", nil
+			}
+			return out, err
+		}
+		return out, nil
 	}
 	var out strings.Builder
 	err := filepath.WalkDir(w.Root, func(path string, d fs.DirEntry, err error) error {

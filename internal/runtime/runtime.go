@@ -2,10 +2,8 @@ package runtime
 
 import (
 	"context"
-	"encoding/json"
 	"fmt"
 	"os"
-	"path/filepath"
 	"strings"
 
 	"github.com/acidsound/Motive/internal/model"
@@ -68,11 +66,3 @@ func (r *Runtime) Execute(ctx context.Context, request string) (string, error) {
 	return "", fmt.Errorf("tool loop exceeded %d steps", r.MaxSteps)
 }
 
-func (r *Runtime) SaveExecution(request, result string) error {
-	dir := filepath.Join(r.WS.Root, ".motive", "executions")
-	if err := os.MkdirAll(dir, 0o755); err != nil { return err }
-	entry := map[string]any{"request": request, "result": result, "git_head": r.WS.GitHEAD()}
-	data, _ := json.MarshalIndent(entry, "", "  ")
-	name := filepath.Join(dir, fmt.Sprintf("%d.json", os.Getpid()))
-	return os.WriteFile(name, append(data, '\n'), 0o644)
-}

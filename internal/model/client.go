@@ -87,7 +87,11 @@ func env(key, fallback string) string {
 }
 
 func (c *Client) Chat(ctx context.Context, messages []Message, tools []Tool) (Message, error) {
-	body, err := json.Marshal(request{Model: c.Model, Messages: messages, Tools: tools, ToolChoice: "auto"})
+	choice := ""
+	if len(tools) > 0 {
+		choice = "auto"
+	}
+	body, err := json.Marshal(request{Model: c.Model, Messages: messages, Tools: tools, ToolChoice: choice})
 	if err != nil {
 		return Message{}, fmt.Errorf("marshal request: %w", err)
 	}

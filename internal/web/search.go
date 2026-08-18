@@ -14,7 +14,6 @@ import (
 type Result struct { Title, URL, Snippet string }
 
 var linkRE = regexp.MustCompile(`(?s)<a[^>]*class="result__a"[^>]*href="([^"]+)"[^>]*>(.*?)</a>`)
-var snippetRE = regexp.MustCompile(`(?s)<a[^>]*class="result__snippet"[^>]*>(.*?)</a>`)
 var tagRE = regexp.MustCompile(`<[^>]+>`)
 
 func Search(query string) (string, error) {
