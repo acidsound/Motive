@@ -1,0 +1,1 @@
+Review the following workspace context as a software engineering analysis task. Identify three important interacting issues, explain the evidence and causal relationship for each, and rank the issues by likely impact. Return a concise but reasoned answer.
