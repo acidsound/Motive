@@ -181,7 +181,24 @@ Motive does not automatically commit or push model changes. The model must invok
 
 Rollback, approval workflows, and automatic self-rewrite policies are **[UNKNOWN]** and are intentionally not part of the current self-modification contract.
 
-## 14. Stable invariants
+## 14. Validated current state
+
+The project has reached a verified baseline suitable for continuing implementation:
+
+- `gofmt -l .` is clean after formatting `internal/model/client.go`. **[TEST]**
+- `go test ./...` passes. **[TEST]**
+- `go vet ./...` passes. **[TEST]**
+- `git diff --check` passes. **[TEST]**
+- A GitHub Actions run subsequently passed after the formatting correction. **[OBSERVED]**
+- A real Motive execution using `MOTIVE_TEMPERATURE=0.6` and `MOTIVE_REASONING_EFFORT=low` successfully completed a code-review-and-fix task, including verification and Git commit/push when explicitly requested. **[OBSERVED]**
+
+The llama-server benchmark phase is considered complete. Tests across `low`, `medium`, and `xhigh` at the tested context sizes established that reasoning effort affects latency, but did not reproduce the 60–80 second Motive stalls as a simple tool-calling multiplier. **[OBSERVED]**
+
+The benchmark is therefore retained as diagnostic tooling, not as the next development focus. Further investigation of long executions should use Motive's own execution telemetry and request semantics rather than expanding the standalone benchmark matrix. **[DECISION]**
+
+The observed long Motive turns with thousands of predicted reasoning tokens establish a concrete investigation target, but do not by themselves establish the root cause. The root cause remains **[UNKNOWN]** until reproduced and localized with Motive telemetry.
+
+## 15. Stable invariants
 
 1. **Fresh request context:** a user request is executed from a newly constructed model context rather than assumed prior chat history. **[SOURCE]**
 2. **Workspace as persistent world:** files and Git state are the persistent execution state. **[SOURCE]**
@@ -193,9 +210,10 @@ Rollback, approval workflows, and automatic self-rewrite policies are **[UNKNOWN
 8. **Recovery escalation is temporary:** failure-driven `xhigh` escalation does not replace the configured default effort. **[SOURCE]**
 9. **Telemetry is observational:** execution telemetry describes what happened and is not itself evidence that autonomous adaptation is implemented. **[DECISION]**
 10. **Runtime self-observation is bounded:** model-visible observations contain execution metadata, not hidden reasoning content. **[DECISION]**
-11. **Self-modification is model-directed:** workspace changes occur through the existing tools and are not silently committed or pushed by the runtime. **[SOURCE][DECISION]**
+11. **Self-modification is model-directed:** workspace changes occur through the existing tools and are not silently committed or pushed by the runtime. **[SOURCE]**
+12. **Validated baseline:** formatting, tests, vetting, and diff checks are expected to remain green before advancing to the next semantic layer. **[TEST][DECISION]**
 
-## 15. Explicitly unresolved semantics
+## 16. Explicitly unresolved semantics
 
 These areas must remain marked unresolved until verified by source, tests, or explicit project decisions:
 
@@ -206,8 +224,23 @@ These areas must remain marked unresolved until verified by source, tests, or ex
 - rollback semantics for autonomous modifications
 - whether and when an execution must create a Git commit
 - cross-session/project memory beyond the repository state
+- root cause of unusually long reasoning generations in real Motive executions
+- whether the current self-observation data is sufficient for reliable anomaly detection
 
-## 16. Context reconstruction rule
+## 17. Next semantic frontier
+
+The next work should proceed in this order:
+
+1. **Execution budget semantics:** make the distinction between runtime loop budget and per-turn model reasoning budget explicit and observable.
+2. **Reasoning telemetry:** expose enough bounded telemetry to identify abnormal reasoning generation without exposing hidden chain-of-thought.
+3. **TUI reasoning control:** retain `low` as the default and allow deliberate user changes among `low`, `medium`, and `xhigh`.
+4. **Recovery policy:** verify and constrain failure-driven escalation and restoration behavior.
+5. **Self-observation:** use the bounded runtime observations to detect execution anomalies before introducing autonomous policy changes.
+6. **Self-modification:** only after observation semantics are stable, evaluate model-directed modification policies and safeguards.
+
+This ordering is a project decision, not a claim that later capabilities are already implemented. **[DECISION]**
+
+## 18. Context reconstruction rule
 
 This document is intended to be sufficient to reconstruct the semantic identity and current execution model of Motive without relying on the conversation that produced it.
 
