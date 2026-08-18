@@ -64,6 +64,7 @@ const (
 	overlayModelPicker
 	overlaySessionPicker
 	overlayDiff
+	overlayHelp
 )
 
 type message struct {
@@ -273,6 +274,10 @@ func (m model) handleKey(msg tea.KeyPressMsg) (tea.Model, tea.Cmd) {
 		m.toggleTools()
 		return m, nil
 
+	case string(m.keys.Help):
+		m.overlay = overlayHelp
+		return m, nil
+
 	case string(m.keys.ScrollUp):
 		m.scroll += 2
 		return m, nil
@@ -352,6 +357,9 @@ func (m model) handleOverlayKey(msg tea.KeyPressMsg) (tea.Model, tea.Cmd) {
 		case string(m.keys.PageDown):
 			m.diffScroll += m.height / 2
 		}
+		return m, nil
+
+	case overlayHelp:
 		return m, nil
 	}
 	return m, nil
@@ -757,7 +765,7 @@ func (m model) renderMessage(msg message, width int) []string {
 		}
 		if len(msg.tools) > 0 {
 			if m.toolsCollapsed {
-				out = append(out, styleToolSum.Render(fmt.Sprintf("⏺ %d tool calls (ctrl+t to expand)", len(msg.tools))))
+				out = append(out, styleToolSum.Render(m.collapsedToolsSummary(msg.tools)))
 			} else {
 				for _, t := range msg.tools {
 					out = append(out, styleTool.Render("→ "+t))
@@ -770,6 +778,17 @@ func (m model) renderMessage(msg message, width int) []string {
 		return out
 	}
 	return wrapStyled(msg.content, width)
+}
+
+// collapsedToolsSummary builds the one-line summary shown for a message's
+// tool calls while they are collapsed: the total count plus the most recent
+// call's details, so the latest activity stays visible without expanding.
+func (m model) collapsedToolsSummary(tools []string) string {
+	summary := fmt.Sprintf("⏺ %d tool calls", len(tools))
+	if last := tools[len(tools)-1]; last != "" {
+		summary += " · last: " + last
+	}
+	return summary + " (" + string(m.keys.ToolsToggle) + " to expand)"
 }
 
 func (m model) statusLine() string {
@@ -816,6 +835,9 @@ func (m model) View() tea.View {
 	height := max(6, m.height)
 	if m.overlay == overlayDiff {
 		return m.diffView(width, height)
+	}
+	if m.overlay == overlayHelp {
+		return m.helpView(width, height)
 	}
 	if m.overlay == overlayModelPicker || m.overlay == overlaySessionPicker {
 		return m.pickerView(width, height)
@@ -892,6 +914,68 @@ func (m model) diffView(width, height int) tea.View {
 	v := tea.NewView(b.String())
 	v.AltScreen = true
 	return v
+}
+
+func (m model) helpView(width, height int) tea.View {
+	lines := buildHelpLines(m.keys)
+	// Reserve 1 line for the footer hint.
+	avail := max(1, height-2)
+	if len(lines) > avail {
+		lines = lines[:avail]
+	}
+	var b strings.Builder
+	b.WriteString(stylePanelHeading.Render("Keybindings"))
+	b.WriteString("\n")
+	for _, l := range lines {
+		b.WriteString(l)
+		b.WriteString("\n")
+	}
+	b.WriteString(styleDim.Render("  esc / ctrl+c close"))
+	v := tea.NewView(b.String())
+	v.AltScreen = true
+	return v
+}
+
+// buildHelpLines returns styled rows for the help overlay.
+func buildHelpLines(k Keymap) []string {
+	type row struct {
+		keys string
+		desc string
+	}
+	rows := []row{
+		{string(k.Run), "Send message"},
+		{string(k.Newline), "Insert newline"},
+		{string(k.CycleEffort), "Cycle reasoning effort"},
+		{string(k.CycleModel), "Cycle provider"},
+		{string(k.ModelPicker), "Model picker"},
+		{string(k.SessionPicker), "Session picker"},
+		{string(k.DiffToggle), "Git diff"},
+		{string(k.PanelToggle), "Toggle panel"},
+		{string(k.ToolsToggle), "Toggle tool output"},
+		{string(k.Help), "Show keybindings (this)"},
+		{string(k.ScrollUp), "Scroll up"},
+		{string(k.ScrollDown), "Scroll down"},
+		{string(k.PageUp), "Page up"},
+		{string(k.PageDown), "Page down"},
+		{string(k.HistoryUp), "History up"},
+		{string(k.HistoryDown), "History down"},
+		{string(k.Bookmark), "Bookmark last message"},
+		{string(k.Clear), "Clear transcript"},
+		{string(k.Quit), "Quit"},
+	}
+	keyW := 0
+	for _, r := range rows {
+		if len(r.keys) > keyW {
+			keyW = len(r.keys)
+		}
+	}
+	keyStyle := lipgloss.NewStyle().Foreground(lipgloss.Color(colorPrompt)).Width(keyW)
+	descStyle := lipgloss.NewStyle().Foreground(lipgloss.Color(colorAssistant))
+	var out []string
+	for _, r := range rows {
+		out = append(out, "  "+keyStyle.Render(r.keys)+"  "+descStyle.Render(r.desc))
+	}
+	return out
 }
 
 // panelWindow returns the visible slice of the panel content for the given

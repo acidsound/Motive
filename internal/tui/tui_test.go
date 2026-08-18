@@ -139,15 +139,21 @@ func TestToolsCollapsedRendering(t *testing.T) {
 		t.Errorf("expanded: missing individual tool line:\n%s", joined)
 	}
 
-	// Collapsed: single summary line.
+	// Collapsed: single summary line with the last tool call's details.
 	m.toolsCollapsed = true
 	lines = m.renderMessage(msg, 60)
 	joined = strings.Join(lines, "\n")
 	if !strings.Contains(joined, "3 tool calls") {
 		t.Errorf("collapsed: missing summary:\n%s", joined)
 	}
+	if !strings.Contains(joined, "last: write_file · 45B · 8ms") {
+		t.Errorf("collapsed: missing last tool call details:\n%s", joined)
+	}
 	if strings.Contains(joined, "shell · 12B · 5ms") {
 		t.Errorf("collapsed: should not show individual tool lines:\n%s", joined)
+	}
+	if strings.Contains(joined, "read_file · 30B · 2ms") {
+		t.Errorf("collapsed: should not show non-last tool lines:\n%s", joined)
 	}
 }
 

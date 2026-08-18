@@ -15,6 +15,9 @@ func TestDefaultKeymap(t *testing.T) {
 	if k.ToolsToggle != "ctrl+t" {
 		t.Errorf("ToolsToggle = %q, want ctrl+t", k.ToolsToggle)
 	}
+	if k.Help != "ctrl+/" {
+		t.Errorf("Help = %q, want ctrl+/", k.Help)
+	}
 }
 
 func TestKeymapApplyEnv(t *testing.T) {
@@ -36,6 +39,15 @@ func TestKeymapToolsToggleEnv(t *testing.T) {
 	k.ApplyEnv()
 	if k.ToolsToggle != "ctrl+x" {
 		t.Errorf("ToolsToggle = %q, want ctrl+x override", k.ToolsToggle)
+	}
+}
+
+func TestKeymapHelpEnv(t *testing.T) {
+	t.Setenv("MOTIVE_KEY_HELP", "f1")
+	k := DefaultKeymap()
+	k.ApplyEnv()
+	if k.Help != "f1" {
+		t.Errorf("Help = %q, want f1 override", k.Help)
 	}
 }
 
