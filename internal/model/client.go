@@ -63,6 +63,13 @@ type response struct {
 	} `json:"choices"`
 }
 
+type ChatStats struct {
+	RequestBytes       int
+	EstimatedInputTokens int
+	ResponseBytes      int
+	Latency             time.Duration
+}
+
 type Client struct {
 	BaseURL string
 	APIKey  string
@@ -86,41 +93,55 @@ func env(key, fallback string) string {
 	return fallback
 }
 
-func (c *Client) Chat(ctx context.Context, messages []Message, tools []Tool) (Message, error) {
+func (c *Client) Chat(ctx context.Context, messages []Message, tools []Tool) (Message, ChatStats, error) {
 	choice := ""
 	if len(tools) > 0 {
 		choice = "auto"
 	}
 	body, err := json.Marshal(request{Model: c.Model, Messages: messages, Tools: tools, ToolChoice: choice})
 	if err != nil {
-		return Message{}, fmt.Errorf("marshal request: %w", err)
+		return Message{}, ChatStats{}, fmt.Errorf("marshal request: %w", err)
 	}
+	stats := ChatStats{
+		RequestBytes:         len(body),
+		EstimatedInputTokens: max(1, len(body)/4),
+	}
+	started := time.Now()
 	req, err := http.NewRequestWithContext(ctx, http.MethodPost, c.BaseURL+"/chat/completions", bytes.NewReader(body))
 	if err != nil {
-		return Message{}, fmt.Errorf("create request: %w", err)
+		return Message{}, stats, fmt.Errorf("create request: %w", err)
 	}
 	req.Header.Set("Content-Type", "application/json")
 	if c.APIKey != "" {
 		req.Header.Set("Authorization", "Bearer "+c.APIKey)
 	}
 	resp, err := c.HTTP.Do(req)
+	stats.Latency = time.Since(started)
 	if err != nil {
-		return Message{}, fmt.Errorf("model request: %w", err)
+		return Message{}, stats, fmt.Errorf("model request: %w", err)
 	}
 	defer resp.Body.Close()
 	data, err := io.ReadAll(io.LimitReader(resp.Body, 64<<20))
 	if err != nil {
-		return Message{}, fmt.Errorf("read response: %w", err)
+		return Message{}, stats, fmt.Errorf("read response: %w", err)
 	}
+	stats.ResponseBytes = len(data)
 	if resp.StatusCode < 200 || resp.StatusCode >= 300 {
-		return Message{}, fmt.Errorf("model returned %s: %s", resp.Status, strings.TrimSpace(string(data)))
+		return Message{}, stats, fmt.Errorf("model returned %s: %s", resp.Status, strings.TrimSpace(string(data)))
 	}
 	var out response
 	if err := json.Unmarshal(data, &out); err != nil {
-		return Message{}, fmt.Errorf("decode response: %w", err)
+		return Message{}, stats, fmt.Errorf("decode response: %w", err)
 	}
 	if len(out.Choices) == 0 {
-		return Message{}, fmt.Errorf("model returned no choices")
+		return Message{}, stats, fmt.Errorf("model returned no choices")
 	}
-	return out.Choices[0].Message, nil
+	return out.Choices[0].Message, stats, nil
+}
+
+func max(a, b int) int {
+	if a > b {
+		return a
+	}
+	return b
 }
