@@ -1,6 +1,7 @@
 package tools
 
 import (
+	"context"
 	"encoding/json"
 	"fmt"
 
@@ -8,6 +9,8 @@ import (
 	"github.com/acidsound/Motive/internal/web"
 	"github.com/acidsound/Motive/internal/workspace"
 )
+
+const MaxToolResultBytes = 64 << 10
 
 type Executor struct{ WS *workspace.Workspace }
 
@@ -28,35 +31,48 @@ func Definitions() []model.Tool {
 	}
 }
 
-func (e *Executor) Run(name, raw string) (string, error) {
+func (e *Executor) Run(ctx context.Context, name, raw string) (string, error) {
 	var args map[string]any
 	if err := json.Unmarshal([]byte(raw), &args); err != nil {
 		return "", fmt.Errorf("invalid %s arguments: %w", name, err)
 	}
 	str := func(key string) string { v, _ := args[key].(string); return v }
 
+	var (
+		result string
+		err    error
+	)
 	switch name {
 	case "read_file":
-		return e.WS.Read(str("path"))
+		result, err = e.WS.ReadContext(ctx, str("path"))
 	case "write_file":
-		if err := e.WS.Write(str("path"), str("content")); err != nil { return "", err }
-		return "written " + str("path"), nil
+		if err = e.WS.WriteContext(ctx, str("path"), str("content")); err == nil { result = "written " + str("path") }
 	case "delete_file":
-		if err := e.WS.Delete(str("path")); err != nil { return "", err }
-		return "deleted " + str("path"), nil
+		if err = e.WS.DeleteContext(ctx, str("path")); err == nil { result = "deleted " + str("path") }
 	case "list_files":
-		return e.WS.List(str("path"))
+		result, err = e.WS.ListContext(ctx, str("path"))
 	case "search_files":
-		return e.WS.Search(str("query"))
+		result, err = e.WS.SearchContext(ctx, str("query"))
 	case "shell":
-		return e.WS.Shell(str("command"))
+		result, err = e.WS.ShellContext(ctx, str("command"))
 	case "web_search":
-		return web.Search(str("query"))
+		result, err = web.Search(str("query"))
 	case "git_status":
-		return e.WS.GitStatus()
+		result, err = e.WS.GitStatusContext(ctx)
 	case "git_diff":
-		return e.WS.GitDiff()
+		result, err = e.WS.GitDiffContext(ctx)
 	default:
 		return "", fmt.Errorf("unknown tool %q", name)
 	}
+	if err != nil {
+		return result, err
+	}
+	return truncate(result), nil
+}
+
+func truncate(s string) string {
+	if len(s) <= MaxToolResultBytes {
+		return s
+	}
+	return s[:MaxToolResultBytes] + fmt.Sprintf("\n\n[tool result truncated: %d bytes total, showing first %d bytes]", len(s), MaxToolResultBytes)
 }
