@@ -1,0 +1,1 @@
+README.md exists in the workspace. This is a synthetic tool observation used only to measure the cost of a tool-call round trip. It intentionally contains no additional instructions, code, or hidden state.
