@@ -42,23 +42,23 @@ func verboseTrace(event runtime.TraceEvent) {
 	prefix := fmt.Sprintf("[motive] step %d/%d", event.Step, event.MaxSteps)
 	switch event.Kind {
 	case "start":
-		fmt.Fprintf(os.Stderr, "[motive] execution started (base %s)\n", shortRevision(event.BaseRevision))
+		fmt.Fprintf(os.Stderr, "[motive] execution started (base %s, reasoning=%s, budget=%d steps)\n", shortRevision(event.BaseRevision), event.ReasoningEffort, event.MaxSteps)
 	case "model_start":
-		fmt.Fprintf(os.Stderr, "%s: model request (%d messages)\n", prefix, event.MessageCount)
+		fmt.Fprintf(os.Stderr, "%s: model request (%d messages, reasoning=%s)\n", prefix, event.MessageCount, event.ReasoningEffort)
 	case "model_end":
 		if event.Error != nil {
 			fmt.Fprintf(os.Stderr, "%s: model error after %s: %v\n", prefix, formatDuration(event.Latency), event.Error)
 			return
 		}
-		fmt.Fprintf(os.Stderr, "%s: model response after %s, request=%dB (~%d tokens), response=%dB, tool_calls=%d\n",
-			prefix, formatDuration(event.Latency), event.RequestBytes, event.EstimatedInputTokens, event.ResponseBytes, event.ToolCalls)
+		fmt.Fprintf(os.Stderr, "%s: model response after %s, request=%dB (~%d tokens), response=%dB, tool_calls=%d, reasoning=%s\n",
+			prefix, formatDuration(event.Latency), event.RequestBytes, event.EstimatedInputTokens, event.ResponseBytes, event.ToolCalls, event.ReasoningEffort)
 		if t := event.ServerTimings; t != nil {
 			fmt.Fprintf(os.Stderr, "%s: server prompt=%d tok %.0fms, predicted=%d tok %.0fms, cache=%d tok\n",
 				prefix, t.PromptN, t.PromptMS, t.PredictedN, t.PredictedMS, t.CacheN)
 		}
 	case "tool":
-		fmt.Fprintf(os.Stderr, "%s: tool %s, result=%dB, %s\n",
-			prefix, event.ToolName, event.ToolResultBytes, formatDuration(event.Latency))
+		fmt.Fprintf(os.Stderr, "%s: tool %s, result=%dB, %s, reasoning=%s\n",
+			prefix, event.ToolName, event.ToolResultBytes, formatDuration(event.Latency), event.ReasoningEffort)
 	case "finish":
 		if event.Error != nil {
 			fmt.Fprintf(os.Stderr, "[motive] execution failed after %s: %v\n", formatDuration(event.TotalElapsed), event.Error)
