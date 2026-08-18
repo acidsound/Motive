@@ -33,11 +33,7 @@ func newModel(rt *runtime.Runtime) model {
 	input.Focus()
 	input.KeyMap.InsertNewline.SetEnabled(false)
 
-	return model{
-		rt:          rt,
-		input:       input,
-		inputHeight: 3,
-	}
+	return model{rt: rt, input: input, inputHeight: 3}
 }
 
 func Run(rt *runtime.Runtime) error {
@@ -46,7 +42,7 @@ func Run(rt *runtime.Runtime) error {
 }
 
 func (m model) Init() tea.Cmd {
-	return tea.Blink()
+	return tea.Blink
 }
 
 func (m model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
@@ -91,9 +87,6 @@ func (m model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			return m, execute(m.rt, request)
 
 		case "shift+enter":
-			// Bubble Tea/Bubbles does not expose a cursor-position insert
-			// primitive in the textarea API. Keep multiline input useful by
-			// inserting at the current end of the buffer.
 			m.input.SetValue(m.input.Value() + "\n")
 			m.input.MoveToEnd()
 			return m, nil
