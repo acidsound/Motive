@@ -27,7 +27,8 @@ type model struct {
 
 func newModel(rt *runtime.Runtime) model {
 	input := textarea.New()
-	input.Prompt = "> "
+	input.Prompt = ""
+	input.ShowLineNumbers = false
 	input.SetVirtualCursor(false)
 	input.SetStyles(textarea.DefaultStyles(true))
 	input.Focus()
@@ -126,12 +127,13 @@ func (m model) View() tea.View {
 	if m.busy {
 		b.WriteString("working…\n")
 	}
-	b.WriteString("\n")
+	b.WriteString("\n> ")
 	b.WriteString(m.input.View())
 
 	v := tea.NewView(b.String())
 	if cursor := m.input.Cursor(); cursor != nil {
-		cursor.Y += len(m.output) + 2
+		cursor.X += 2
+		cursor.Y += len(m.output) + 1
 		if m.busy {
 			cursor.Y++
 		}
