@@ -69,25 +69,25 @@ type response struct {
 }
 
 type ServerTimings struct {
-	CacheN           int     `json:"cache_n"`
-	PromptN          int     `json:"prompt_n"`
-	PromptMS         float64 `json:"prompt_ms"`
-	PromptPerTokenMS float64 `json:"prompt_per_token_ms"`
-	PromptPerSecond  float64 `json:"prompt_per_second"`
-	PredictedN       int     `json:"predicted_n"`
-	PredictedMS      float64 `json:"predicted_ms"`
+	CacheN              int     `json:"cache_n"`
+	PromptN             int     `json:"prompt_n"`
+	PromptMS            float64 `json:"prompt_ms"`
+	PromptPerTokenMS    float64 `json:"prompt_per_token_ms"`
+	PromptPerSecond     float64 `json:"prompt_per_second"`
+	PredictedN          int     `json:"predicted_n"`
+	PredictedMS         float64 `json:"predicted_ms"`
 	PredictedPerTokenMS float64 `json:"predicted_per_token_ms"`
 	PredictedPerSecond  float64 `json:"predicted_per_second"`
-	DraftN           int     `json:"draft_n"`
-	DraftNAccepted   int     `json:"draft_n_accepted"`
+	DraftN              int     `json:"draft_n"`
+	DraftNAccepted      int     `json:"draft_n_accepted"`
 }
 
 type ChatStats struct {
-	RequestBytes          int
-	EstimatedInputTokens  int
-	ResponseBytes         int
-	Latency               time.Duration
-	ServerTimings         *ServerTimings
+	RequestBytes         int
+	EstimatedInputTokens int
+	ResponseBytes        int
+	Latency              time.Duration
+	ServerTimings        *ServerTimings
 }
 
 type Client struct {

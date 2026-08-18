@@ -4,6 +4,8 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
+	"strings"
+	"unicode/utf8"
 
 	"github.com/acidsound/Motive/internal/model"
 	"github.com/acidsound/Motive/internal/web"
@@ -33,7 +35,11 @@ func Definitions() []model.Tool {
 
 func (e *Executor) Run(ctx context.Context, name, raw string) (string, error) {
 	var args map[string]any
-	if err := json.Unmarshal([]byte(raw), &args); err != nil {
+	if strings.TrimSpace(raw) == "" {
+		// Some model servers send an empty string instead of "{}" for tools
+		// with no parameters; treat that as an empty object, not a protocol error.
+		args = map[string]any{}
+	} else if err := json.Unmarshal([]byte(raw), &args); err != nil {
 		return "", fmt.Errorf("invalid %s arguments: %w", name, err)
 	}
 	str := func(key string) string { v, _ := args[key].(string); return v }
@@ -46,9 +52,13 @@ func (e *Executor) Run(ctx context.Context, name, raw string) (string, error) {
 	case "read_file":
 		result, err = e.WS.ReadContext(ctx, str("path"))
 	case "write_file":
-		if err = e.WS.WriteContext(ctx, str("path"), str("content")); err == nil { result = "written " + str("path") }
+		if err = e.WS.WriteContext(ctx, str("path"), str("content")); err == nil {
+			result = "written " + str("path")
+		}
 	case "delete_file":
-		if err = e.WS.DeleteContext(ctx, str("path")); err == nil { result = "deleted " + str("path") }
+		if err = e.WS.DeleteContext(ctx, str("path")); err == nil {
+			result = "deleted " + str("path")
+		}
 	case "list_files":
 		result, err = e.WS.ListContext(ctx, str("path"))
 	case "search_files":
@@ -67,12 +77,17 @@ func (e *Executor) Run(ctx context.Context, name, raw string) (string, error) {
 	if err != nil {
 		return result, err
 	}
-	return truncate(result), nil
+	return Truncate(result), nil
 }
 
-func truncate(s string) string {
+// Truncate bounds s to MaxToolResultBytes without splitting a UTF-8 rune.
+func Truncate(s string) string {
 	if len(s) <= MaxToolResultBytes {
 		return s
 	}
-	return s[:MaxToolResultBytes] + fmt.Sprintf("\n\n[tool result truncated: %d bytes total, showing first %d bytes]", len(s), MaxToolResultBytes)
+	cut := MaxToolResultBytes
+	for cut > 0 && !utf8.RuneStart(s[cut]) {
+		cut--
+	}
+	return s[:cut] + fmt.Sprintf("\n\n[tool result truncated: %d bytes total, showing first %d bytes]", len(s), cut)
 }

@@ -6,6 +6,7 @@ import (
 	"os"
 	"strings"
 	"time"
+	"unicode/utf8"
 
 	"github.com/acidsound/Motive/internal/model"
 	"github.com/acidsound/Motive/internal/tools"
@@ -48,7 +49,7 @@ func New(client *model.Client) *Runtime {
 }
 
 func (r *Runtime) ContextBlock() string {
-	status, _ := r.WS.GitStatus()
+	status, statusErr := r.WS.GitStatus()
 	files, _ := r.WS.List(".")
 	var b strings.Builder
 	b.WriteString(systemPrompt)
@@ -58,18 +59,30 @@ func (r *Runtime) ContextBlock() string {
 		b.WriteString("\nGit HEAD: ")
 		b.WriteString(head)
 	}
-	if status != "" {
+	if statusErr == nil && status != "" {
 		b.WriteString("\nGit status:\n")
 		b.WriteString(status)
 	}
 	if len(files) > 6000 {
-		files = files[:6000] + "\n..."
+		files = truncateUTF8(files, 6000) + "\n..."
 	}
 	if files != "" {
 		b.WriteString("\nWorkspace files:\n")
 		b.WriteString(files)
 	}
 	return b.String()
+}
+
+// truncateUTF8 bounds s to limit bytes without splitting a UTF-8 rune.
+func truncateUTF8(s string, limit int) string {
+	if len(s) <= limit {
+		return s
+	}
+	cut := limit
+	for cut > 0 && !utf8.RuneStart(s[cut]) {
+		cut--
+	}
+	return s[:cut]
 }
 
 func (r *Runtime) emit(event TraceEvent) {
@@ -120,16 +133,22 @@ func (r *Runtime) Execute(ctx context.Context, request string) (string, error) {
 		}
 
 		for _, call := range msg.ToolCalls {
-			if call.Function.Name == "" {
-				continue
-			}
 			toolStarted := time.Now()
-			result, err := r.Exec.Run(ctx, call.Function.Name, call.Function.Arguments)
-			resultBytes := len(result)
-			if err != nil {
-				result = "ERROR: " + err.Error()
+			var result string
+			if call.Function.Name == "" {
+				// A tool call with no name cannot be executed, but the model
+				// still expects a tool result for it. Report the error instead
+				// of silently dropping the call, which would break the
+				// tool-call protocol on the next request.
+				result = "ERROR: tool call has an empty name and was ignored"
+			} else {
+				var err error
+				result, err = r.Exec.Run(ctx, call.Function.Name, call.Function.Arguments)
+				if err != nil {
+					result = "ERROR: " + err.Error()
+				}
 			}
-			r.emit(TraceEvent{Kind: "tool", Step: stepNumber, MaxSteps: r.MaxSteps, ToolName: call.Function.Name, ToolResultBytes: resultBytes, Latency: time.Since(toolStarted), TotalElapsed: time.Since(started)})
+			r.emit(TraceEvent{Kind: "tool", Step: stepNumber, MaxSteps: r.MaxSteps, ToolName: call.Function.Name, ToolResultBytes: len(result), Latency: time.Since(toolStarted), TotalElapsed: time.Since(started)})
 			messages = append(messages, model.Message{Role: "tool", ToolCallID: call.ID, Content: result})
 		}
 	}
