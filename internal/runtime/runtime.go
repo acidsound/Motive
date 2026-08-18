@@ -34,6 +34,8 @@ type TraceEvent struct {
 	ReasoningEffort      string
 	BaseRevision         string
 	ResultRevision       string
+	Text                 string
+	Reasoning            string
 	Error                error
 }
 
@@ -60,6 +62,7 @@ type Runtime struct {
 	MaxSteps int
 	Budget   ExecutionBudget
 	Trace    func(TraceEvent)
+	Stream   bool
 }
 
 const (
@@ -195,7 +198,16 @@ func (r *Runtime) Execute(ctx context.Context, request string) (string, error) {
 
 		stepNumber := step + 1
 		r.emit(TraceEvent{Kind: "model_start", Step: stepNumber, MaxSteps: budget.MaxSteps, MessageCount: len(messages), TotalToolCalls: obs.TotalToolCalls, ReasoningEffort: effort, TotalElapsed: time.Since(started)})
-		msg, stats, err := r.Model.ChatWithEffort(ctx, messages, toolDefs, effort)
+		var msg model.Message
+		var stats model.ChatStats
+		var err error
+		if r.Stream {
+			msg, stats, err = r.Model.ChatStream(ctx, messages, toolDefs, effort, func(delta model.StreamDelta) {
+				r.emit(TraceEvent{Kind: "delta", Step: stepNumber, MaxSteps: budget.MaxSteps, MessageCount: len(messages), TotalToolCalls: obs.TotalToolCalls, ReasoningEffort: effort, TotalElapsed: time.Since(started), Text: delta.Content, Reasoning: delta.Reasoning})
+			})
+		} else {
+			msg, stats, err = r.Model.ChatWithEffort(ctx, messages, toolDefs, effort)
+		}
 		if err != nil {
 			r.emit(TraceEvent{Kind: "model_end", Step: stepNumber, MaxSteps: budget.MaxSteps, MessageCount: len(messages), TotalToolCalls: obs.TotalToolCalls, RequestBytes: stats.RequestBytes, EstimatedInputTokens: stats.EstimatedInputTokens, ResponseBytes: stats.ResponseBytes, Latency: stats.Latency, ServerTimings: stats.ServerTimings, ReasoningEffort: effort, TotalElapsed: time.Since(started), Error: err})
 			r.emit(TraceEvent{Kind: "finish", Step: stepNumber, MaxSteps: budget.MaxSteps, TotalToolCalls: obs.TotalToolCalls, TotalElapsed: time.Since(started), ReasoningEffort: effort, BaseRevision: baseRevision, ResultRevision: r.WS.GitHEAD(), Error: err})
