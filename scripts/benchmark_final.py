@@ -46,20 +46,23 @@ def fit(v1, seed, target, timeout):
     return text, n2
 
 def info(resp):
-    msg = ((resp.get('choices') or [{}])[0].get('message') or {})
+    choices = resp.get('choices') or []
+    msg = (choices[0].get('message') or {}) if choices else {}
     calls = msg.get('tool_calls') or []
     reason = msg.get('reasoning_content') or msg.get('reasoning') or ''
     usage = resp.get('usage') or {}
+    finish = choices[0].get('finish_reason') if choices else None
     return {
         'kind': 'tool_call' if calls else 'text',
         'calls': len(calls),
         'completion': usage.get('completion_tokens'),
         'reasoning_bytes': len(reason.encode()) if isinstance(reason, str) else 0,
         'bytes': len(json.dumps(resp, ensure_ascii=False).encode()),
+        'finish_reason': finish,
         'message': msg,
     }
 
-def call(v1, model, msgs, tools=None, choice=None, out=64, temp=0.0, timeout=300):
+def call(v1, model, msgs, tools=None, choice=None, out=256, temp=0.0, timeout=300):
     p = {'model': model, 'messages': msgs, 'max_tokens': out, 'temperature': temp}
     if tools is not None: p['tools'] = tools
     if choice is not None: p['tool_choice'] = choice
@@ -74,7 +77,7 @@ def main():
     ap.add_argument('--tokens', nargs='+', type=int, default=[8000,10000,12000])
     ap.add_argument('--runs', type=int, default=3)
     ap.add_argument('--warmup', type=int, default=1)
-    ap.add_argument('--output-tokens', type=int, default=64)
+    ap.add_argument('--output-tokens', type=int, default=256)
     ap.add_argument('--timeout', type=float, default=300)
     ap.add_argument('--dump-roundtrip', action='store_true')
     args = ap.parse_args()
@@ -86,7 +89,7 @@ def main():
     cases = ['plain','reasoning','tools','required_tool','roundtrip']
     med = {c:{} for c in cases}
     bad = []
-    print('case,target_tokens,actual_tokens,run,latency_s,completion_tokens,response_kind,tool_calls,reasoning_bytes,response_bytes,status')
+    print('case,target_tokens,actual_tokens,run,latency_s,completion_tokens,response_kind,tool_calls,reasoning_bytes,response_bytes,finish_reason,status')
 
     for target in args.tokens:
         prompt, actual = fit(args.url, seed, target, args.timeout)
@@ -102,13 +105,16 @@ def main():
                     elapsed, resp, status = _run(case,args,prompt,reasoning,tools,tool_result,dump=args.dump_roundtrip)
                 except Exception as exc:
                     bad.append((case,target,f'exception:{type(exc).__name__}:{exc}'))
-                    print(f'{case},{target},{actual if actual is not None else "?"},{run},ERROR,?,?,?,?,exception:{type(exc).__name__}', flush=True)
+                    print(f'{case},{target},{actual if actual is not None else "?"},{run},ERROR,?,?,?,?,?,exception:{type(exc).__name__}', flush=True)
                     if args.dump_roundtrip and case == 'roundtrip':
                         print(f'[roundtrip:error] {type(exc).__name__}: {exc}', file=sys.stderr)
                     continue
                 x=info(resp); vals.append(elapsed); med[case].setdefault(target,[]).append(elapsed)
                 if status != 'ok': bad.append((case,target,status))
-                print(f"{case},{target},{actual if actual is not None else '?'},{run},{elapsed:.3f},{x['completion'] if isinstance(x['completion'],int) else '?'},{x['kind']},{x['calls']},{x['reasoning_bytes']},{x['bytes']},{status}")
+                completion = x['completion'] if isinstance(x['completion'],int) else '?'
+                actual_text = actual if actual is not None else '?'
+                finish = x['finish_reason'] or '?'
+                print(f"{case},{target},{actual_text},{run},{elapsed:.3f},{completion},{x['kind']},{x['calls']},{x['reasoning_bytes']},{x['bytes']},{finish},{status}")
             if vals:
                 print(f"# {case} {target}: median={statistics.median(vals):.3f}s min={min(vals):.3f}s max={max(vals):.3f}s")
 
@@ -146,18 +152,24 @@ def _run(case,args,prompt,reasoning,tools,tool_result,dump=False):
         msgs=[system,{'role':'user','content':prompt+'\nDo not use any tools. Reply briefly.'}]
         e,r=call(args.url,args.model,msgs,tools=tools,out=args.output_tokens,timeout=args.timeout); return e,r,'ok'
     if case in ('required_tool','roundtrip'):
-        msgs=[system,{'role':'user','content':prompt+'\nCall read_file exactly once for README.md.'}]
+        tool_prompt = 'Use read_file exactly once to inspect README.md. The tool arguments must be valid JSON with path set to README.md.'
+        msgs=[system,{'role':'user','content':prompt+'\n'+tool_prompt}]
         e1,r1=call(args.url,args.model,msgs,tools=tools,choice='required',out=args.output_tokens,timeout=args.timeout)
         i1=info(r1)
         if i1['calls']==0:
             return e1,r1,'no_tool_call'
+        calls = i1['message'].get('tool_calls') or []
+        if i1['finish_reason'] == 'length':
+            return e1,r1,'truncated_tool_call'
+        if not calls:
+            return e1,r1,'no_tool_call'
+        try:
+            json.loads(calls[0].get('function',{}).get('arguments',''))
+        except (TypeError, json.JSONDecodeError):
+            return e1,r1,'invalid_tool_arguments'
         if case=='required_tool':
             return e1,r1,'ok'
         m=dict(i1['message'])
-        calls=m.get('tool_calls') or []
-        if not calls:
-            return e1,r1,'no_tool_call'
-        # Replay exactly the assistant tool-call turn, making content explicit.
         m['content'] = m.get('content') or ''
         msgs.append(m)
         c=calls[0]
