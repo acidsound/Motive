@@ -52,6 +52,10 @@ func verboseTrace(event runtime.TraceEvent) {
 		}
 		fmt.Fprintf(os.Stderr, "%s: model response after %s, request=%dB (~%d tokens), response=%dB, tool_calls=%d\n",
 			prefix, formatDuration(event.Latency), event.RequestBytes, event.EstimatedInputTokens, event.ResponseBytes, event.ToolCalls)
+		if t := event.ServerTimings; t != nil {
+			fmt.Fprintf(os.Stderr, "%s: server prompt=%d tok %.0fms, predicted=%d tok %.0fms, cache=%d tok\n",
+				prefix, t.PromptN, t.PromptMS, t.PredictedN, t.PredictedMS, t.CacheN)
+		}
 	case "tool":
 		fmt.Fprintf(os.Stderr, "%s: tool %s, result=%dB, %s\n",
 			prefix, event.ToolName, event.ToolResultBytes, formatDuration(event.Latency))
