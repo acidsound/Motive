@@ -6,7 +6,7 @@ on:
   pull_request:
 
 permissions:
-  contents: read
+  contents: write
 
 jobs:
   test:
@@ -15,6 +15,8 @@ jobs:
     steps:
       - name: Check out repository
         uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
 
       - name: Set up Go
         uses: actions/setup-go@v5
@@ -22,12 +24,23 @@ jobs:
           go-version-file: go.mod
           cache: true
 
-      - name: Verify formatting
-        run: |
-          test -z "$(gofmt -l .)"
+      - name: Generate module metadata
+        run: go mod tidy
 
-      - name: Download dependencies
-        run: go mod download
+      - name: Commit generated module metadata
+        if: github.event_name == 'push' && github.ref == 'refs/heads/main'
+        run: |
+          if git diff --quiet -- go.mod go.sum; then
+            exit 0
+          fi
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git add go.mod go.sum
+          git commit -m "chore: update Go module metadata"
+          git push
+
+      - name: Verify formatting
+        run: test -z "$(gofmt -l .)"
 
       - name: Run tests
         run: go test ./...
