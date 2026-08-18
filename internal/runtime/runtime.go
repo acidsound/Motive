@@ -212,7 +212,7 @@ func (r *Runtime) Execute(ctx context.Context, request string) (string, error) {
 		if toolFailed {
 			effort = "xhigh"
 		} else if effort == "xhigh" {
-			effort = "low"
+			effort = r.Model.GetReasoningEffort()
 		} else {
 			effort = r.Model.GetReasoningEffort()
 		}

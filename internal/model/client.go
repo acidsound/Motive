@@ -57,7 +57,7 @@ type request struct {
 	Messages           []Message         `json:"messages"`
 	Tools              []Tool            `json:"tools,omitempty"`
 	ToolChoice         string            `json:"tool_choice,omitempty"`
-	Temperature        float64           `json:"temperature,omitempty"`
+	Temperature        float64           `json:"temperature"`
 	MaxTokens          int               `json:"max_tokens,omitempty"`
 	ReasoningEffort    string            `json:"reasoning_effort,omitempty"`
 	ChatTemplateKwargs map[string]string `json:"chat_template_kwargs,omitempty"`
@@ -93,13 +93,13 @@ type ChatStats struct {
 }
 
 type Client struct {
-	BaseURL          string
-	APIKey           string
-	Model            string
-	Temperature      float64
-	MaxTokens        int
-	ReasoningEffort  string
-	HTTP             *http.Client
+	BaseURL         string
+	APIKey          string
+	Model           string
+	Temperature     float64
+	MaxTokens       int
+	ReasoningEffort string
+	HTTP            *http.Client
 }
 
 func NewFromEnv() *Client {
