@@ -1,35 +1,53 @@
 # Motive
 
-Motive is a minimal execution runtime for reasoning models.
+Motive is a small model-centric execution runtime. The model is the reasoning and planning component; Motive provides a workspace, tools, execution, and revision-aware environment.
 
-The project starts from a simple premise: a capable model should not be wrapped in a large agent framework that dictates how it reasons or acts. Instead, Motive provides a small, explicit execution environment in which the model can observe state, use tools, modify a workspace, and produce a revision.
+The initial implementation deliberately avoids an agent framework and plugin system. It talks to any OpenAI-compatible `/v1/chat/completions` endpoint and gives the model direct access to files, shell, web search, and Git state.
 
-## Design direction
-
-- Go binary with CLI and TUI interfaces.
-- Model inference is external to Motive.
-- Initial model boundary is the OpenAI-compatible API.
-- No plugin system in the core runtime.
-- Conversation is an interaction UI, not the authoritative source of memory.
-- Context is compiled from current state, workspace, assets, memory, and revision history.
-- Git is the authoritative history of source changes.
-- Execution records connect user intent, compiled context, model actions, and resulting revisions.
-
-## Initial execution loop
+## Current loop
 
 ```text
 request
-  -> context compilation
-  -> OpenAI-compatible model endpoint
+  -> context compiler
+  -> OpenAI-compatible model
   -> tool call
-  -> execution / observation
+  -> local execution / observation
   -> model
-  -> final result
-  -> workspace diff / revision
+  -> ...
+  -> final response
 ```
 
-The first prototype deliberately keeps this loop small. Memory retrieval, semantic indexes, remote sandboxes, and additional providers are deferred until the core model-centric execution model has been validated.
+Each user request starts with a fresh model context. The persistent world is the workspace, its files, and Git state rather than chat history.
+
+## Run
+
+```bash
+go build -o motive ./cmd/motive
+./motive --tui
+./motive "inspect this project and fix the failing test"
+```
+
+Configuration:
+
+```text
+MOTIVE_BASE_URL   default: http://127.0.0.1:8080/v1
+MOTIVE_MODEL      default: Qwen3.8-27B
+MOTIVE_API_KEY    optional
+MOTIVE_WORKSPACE  default: current directory
+```
+
+`OPENAI_BASE_URL`, `OPENAI_MODEL`, and `OPENAI_API_KEY` are accepted as fallbacks.
+
+## Tools exposed to the model
+
+- `read_file`, `write_file`, `delete_file`
+- `list_files`, `search_files`
+- `shell`
+- `web_search`
+- `git_status`, `git_diff`
+
+The tool set is intentionally concrete. There is no planner, sub-agent layer, memory manager, or plugin registry in the execution path.
 
 ## Status
 
-Early prototype.
+Prototype, but already an end-to-end execution loop. The next work should focus on context quality, execution tracing, Git revision records, and a richer TUI rather than adding framework layers.
