@@ -131,6 +131,7 @@ func (m model) View() tea.View {
 	b.WriteString(m.input.View())
 
 	v := tea.NewView(b.String())
+	v.AltScreen = true
 	if cursor := m.input.Cursor(); cursor != nil {
 		cursor.X += 2
 		cursor.Y += len(m.output) + 1
