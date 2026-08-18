@@ -1,0 +1,98 @@
+[
+  {
+    "type": "function",
+    "function": {
+      "name": "read_file",
+      "description": "Read a UTF-8 text file in the workspace.",
+      "parameters": {
+        "type": "object",
+        "properties": {"path": {"type": "string"}},
+        "required": ["path"]
+      }
+    }
+  },
+  {
+    "type": "function",
+    "function": {
+      "name": "write_file",
+      "description": "Create or replace a UTF-8 text file.",
+      "parameters": {
+        "type": "object",
+        "properties": {"path": {"type": "string"}, "content": {"type": "string"}},
+        "required": ["path", "content"]
+      }
+    }
+  },
+  {
+    "type": "function",
+    "function": {
+      "name": "delete_file",
+      "description": "Delete a file in the workspace.",
+      "parameters": {
+        "type": "object",
+        "properties": {"path": {"type": "string"}},
+        "required": ["path"]
+      }
+    }
+  },
+  {
+    "type": "function",
+    "function": {
+      "name": "list_files",
+      "description": "List files below a workspace directory.",
+      "parameters": {"type": "object", "properties": {"path": {"type": "string"}}}
+    }
+  },
+  {
+    "type": "function",
+    "function": {
+      "name": "search_files",
+      "description": "Search text in workspace files.",
+      "parameters": {
+        "type": "object",
+        "properties": {"query": {"type": "string"}},
+        "required": ["query"]
+      }
+    }
+  },
+  {
+    "type": "function",
+    "function": {
+      "name": "shell",
+      "description": "Execute a shell command in the workspace.",
+      "parameters": {
+        "type": "object",
+        "properties": {"command": {"type": "string"}},
+        "required": ["command"]
+      }
+    }
+  },
+  {
+    "type": "function",
+    "function": {
+      "name": "web_search",
+      "description": "Search the public web.",
+      "parameters": {
+        "type": "object",
+        "properties": {"query": {"type": "string"}},
+        "required": ["query"]
+      }
+    }
+  },
+  {
+    "type": "function",
+    "function": {
+      "name": "git_status",
+      "description": "Show Git branch, revision and working-tree changes.",
+      "parameters": {"type": "object", "properties": {}}
+    }
+  },
+  {
+    "type": "function",
+    "function": {
+      "name": "git_diff",
+      "description": "Show the current unstaged Git diff.",
+      "parameters": {"type": "object", "properties": {}}
+    }
+  }
+]
