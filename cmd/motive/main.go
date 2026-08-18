@@ -44,28 +44,28 @@ func verboseTrace(event runtime.TraceEvent) {
 	case "start":
 		fmt.Fprintf(os.Stderr, "[motive] execution started (base %s, reasoning=%s, budget=%d steps)\n", shortRevision(event.BaseRevision), event.ReasoningEffort, event.MaxSteps)
 	case "model_start":
-		fmt.Fprintf(os.Stderr, "%s: model request (%d messages, reasoning=%s)\n", prefix, event.MessageCount, event.ReasoningEffort)
+		fmt.Fprintf(os.Stderr, "%s: model request (%d messages, reasoning=%s, tools=%d)\n", prefix, event.MessageCount, event.ReasoningEffort, event.TotalToolCalls)
 	case "model_end":
 		if event.Error != nil {
 			fmt.Fprintf(os.Stderr, "%s: model error after %s: %v\n", prefix, formatDuration(event.Latency), event.Error)
 			return
 		}
-		fmt.Fprintf(os.Stderr, "%s: model response after %s, request=%dB (~%d tokens), response=%dB, tool_calls=%d, reasoning=%s\n",
-			prefix, formatDuration(event.Latency), event.RequestBytes, event.EstimatedInputTokens, event.ResponseBytes, event.ToolCalls, event.ReasoningEffort)
+		fmt.Fprintf(os.Stderr, "%s: model response after %s, request=%dB (~%d tokens), response=%dB, tool_calls=%d, total_tools=%d, reasoning=%s\n",
+			prefix, formatDuration(event.Latency), event.RequestBytes, event.EstimatedInputTokens, event.ResponseBytes, event.ToolCalls, event.TotalToolCalls, event.ReasoningEffort)
 		if t := event.ServerTimings; t != nil {
 			fmt.Fprintf(os.Stderr, "%s: server prompt=%d tok %.0fms, predicted=%d tok %.0fms, cache=%d tok\n",
 				prefix, t.PromptN, t.PromptMS, t.PredictedN, t.PredictedMS, t.CacheN)
 		}
 	case "tool":
-		fmt.Fprintf(os.Stderr, "%s: tool %s, result=%dB, %s, reasoning=%s\n",
-			prefix, event.ToolName, event.ToolResultBytes, formatDuration(event.Latency), event.ReasoningEffort)
+		fmt.Fprintf(os.Stderr, "%s: tool %s, result=%dB, %s, total_tools=%d, reasoning=%s\n",
+			prefix, event.ToolName, event.ToolResultBytes, formatDuration(event.Latency), event.TotalToolCalls, event.ReasoningEffort)
 	case "finish":
 		if event.Error != nil {
 			fmt.Fprintf(os.Stderr, "[motive] execution failed after %s: %v\n", formatDuration(event.TotalElapsed), event.Error)
 			return
 		}
-		fmt.Fprintf(os.Stderr, "[motive] execution finished in %s (base=%s result=%s)\n",
-			formatDuration(event.TotalElapsed), shortRevision(event.BaseRevision), shortRevision(event.ResultRevision))
+		fmt.Fprintf(os.Stderr, "[motive] execution finished in %s (base=%s result=%s tools=%d)\n",
+			formatDuration(event.TotalElapsed), shortRevision(event.BaseRevision), shortRevision(event.ResultRevision), event.TotalToolCalls)
 	}
 }
 

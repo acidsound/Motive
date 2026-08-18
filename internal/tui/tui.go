@@ -125,7 +125,7 @@ func (m *model) cycleEffort() {
 
 func execute(rt *runtime.Runtime, request string) tea.Cmd {
 	return func() tea.Msg {
-		ctx, cancel := context.WithTimeout(context.Background(), 30*time.Minute)
+		ctx, cancel := context.WithTimeout(context.Background(), rt.Budget.MaxDuration)
 		defer cancel()
 		result, err := rt.Execute(ctx, request)
 		return doneMsg{text: result, err: err}
@@ -161,7 +161,7 @@ func (m model) View() tea.View {
 	b.WriteString("\n> ")
 	b.WriteString(m.input.View())
 	b.WriteString("\n")
-	b.WriteString(fmt.Sprintf("reasoning: %s   [ctrl+e]   budget: %d steps / %s", m.rt.Model.GetReasoningEffort(), m.rt.Budget.MaxSteps, m.rt.Budget.MaxDuration.Round(time.Minute)))
+	b.WriteString(fmt.Sprintf("reasoning: %s   [ctrl+e]   budget: %d steps / %d tools / %s", m.rt.Model.GetReasoningEffort(), m.rt.Budget.MaxSteps, m.rt.Budget.MaxToolCalls, m.rt.Budget.MaxDuration.Round(time.Minute)))
 
 	v := tea.NewView(b.String())
 	v.AltScreen = true

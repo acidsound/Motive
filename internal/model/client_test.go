@@ -24,3 +24,22 @@ func TestMessageAlwaysSerializesContent(t *testing.T) {
 		t.Fatalf("content = %v, want empty string", content)
 	}
 }
+
+func TestNormalizeEffort(t *testing.T) {
+	for _, tc := range []struct {
+		input string
+		want  string
+	}{
+		{"low", "low"},
+		{"MEDIUM", "medium"},
+		{" xhigh ", "xhigh"},
+		{"high", "low"},
+		{"max", "low"},
+		{"none", "low"},
+		{"unknown", "low"},
+	} {
+		if got := normalizeEffort(tc.input); got != tc.want {
+			t.Errorf("normalizeEffort(%q) = %q, want %q", tc.input, got, tc.want)
+		}
+	}
+}

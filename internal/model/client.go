@@ -114,9 +114,12 @@ func NewFromEnv() *Client {
 	}
 }
 
+// normalizeEffort intentionally reflects the effort levels supported by the
+// current Motive/Qwen deployment contract. Provider-specific broader vocabularies
+// must not silently become Motive semantics.
 func normalizeEffort(v string) string {
 	switch strings.ToLower(strings.TrimSpace(v)) {
-	case "low", "medium", "high", "xhigh", "max", "none":
+	case "low", "medium", "xhigh":
 		return strings.ToLower(strings.TrimSpace(v))
 	default:
 		return "low"
