@@ -53,12 +53,14 @@ type ToolProperty struct {
 }
 
 type request struct {
-	Model       string    `json:"model"`
-	Messages    []Message `json:"messages"`
-	Tools       []Tool    `json:"tools,omitempty"`
-	ToolChoice  string    `json:"tool_choice,omitempty"`
-	Temperature float64   `json:"temperature,omitempty"`
-	MaxTokens   int       `json:"max_tokens,omitempty"`
+	Model              string            `json:"model"`
+	Messages           []Message         `json:"messages"`
+	Tools              []Tool            `json:"tools,omitempty"`
+	ToolChoice         string            `json:"tool_choice,omitempty"`
+	Temperature        float64           `json:"temperature,omitempty"`
+	MaxTokens          int               `json:"max_tokens,omitempty"`
+	ReasoningEffort    string            `json:"reasoning_effort,omitempty"`
+	ChatTemplateKwargs map[string]string `json:"chat_template_kwargs,omitempty"`
 }
 
 type response struct {
@@ -91,23 +93,42 @@ type ChatStats struct {
 }
 
 type Client struct {
-	BaseURL     string
-	APIKey      string
-	Model       string
-	Temperature float64
-	MaxTokens   int
-	HTTP        *http.Client
+	BaseURL          string
+	APIKey           string
+	Model            string
+	Temperature      float64
+	MaxTokens        int
+	ReasoningEffort  string
+	HTTP             *http.Client
 }
 
 func NewFromEnv() *Client {
 	return &Client{
-		BaseURL:     strings.TrimRight(env("MOTIVE_BASE_URL", env("OPENAI_BASE_URL", "http://127.0.0.1:8080/v1")), "/"),
-		APIKey:      env("MOTIVE_API_KEY", env("OPENAI_API_KEY", "")),
-		Model:       env("MOTIVE_MODEL", env("OPENAI_MODEL", "Qwen3.8-27B")),
-		Temperature: envFloat("MOTIVE_TEMPERATURE", envFloat("OPENAI_TEMPERATURE", 0.6)),
-		MaxTokens:   envInt("MOTIVE_MAX_TOKENS", envInt("OPENAI_MAX_TOKENS", 0)),
-		HTTP:        &http.Client{Timeout: 10 * time.Minute},
+		BaseURL:         strings.TrimRight(env("MOTIVE_BASE_URL", env("OPENAI_BASE_URL", "http://127.0.0.1:8080/v1")), "/"),
+		APIKey:          env("MOTIVE_API_KEY", env("OPENAI_API_KEY", "")),
+		Model:           env("MOTIVE_MODEL", env("OPENAI_MODEL", "Qwen3.8-27B")),
+		Temperature:     envFloat("MOTIVE_TEMPERATURE", envFloat("OPENAI_TEMPERATURE", 0.6)),
+		MaxTokens:       envInt("MOTIVE_MAX_TOKENS", envInt("OPENAI_MAX_TOKENS", 0)),
+		ReasoningEffort: normalizeEffort(env("MOTIVE_REASONING_EFFORT", "low")),
+		HTTP:            &http.Client{Timeout: 10 * time.Minute},
 	}
+}
+
+func normalizeEffort(v string) string {
+	switch strings.ToLower(strings.TrimSpace(v)) {
+	case "low", "medium", "high", "xhigh", "max", "none":
+		return strings.ToLower(strings.TrimSpace(v))
+	default:
+		return "low"
+	}
+}
+
+func (c *Client) SetReasoningEffort(effort string) {
+	c.ReasoningEffort = normalizeEffort(effort)
+}
+
+func (c *Client) GetReasoningEffort() string {
+	return c.ReasoningEffort
 }
 
 func env(key, fallback string) string {
@@ -142,17 +163,24 @@ func envInt(key string, fallback int) int {
 }
 
 func (c *Client) Chat(ctx context.Context, messages []Message, tools []Tool) (Message, ChatStats, error) {
+	return c.ChatWithEffort(ctx, messages, tools, c.ReasoningEffort)
+}
+
+func (c *Client) ChatWithEffort(ctx context.Context, messages []Message, tools []Tool, effort string) (Message, ChatStats, error) {
 	choice := ""
 	if len(tools) > 0 {
 		choice = "auto"
 	}
+	effort = normalizeEffort(effort)
 	body, err := json.Marshal(request{
-		Model:       c.Model,
-		Messages:    messages,
-		Tools:       tools,
-		ToolChoice:  choice,
-		Temperature: c.Temperature,
-		MaxTokens:   c.MaxTokens,
+		Model:              c.Model,
+		Messages:           messages,
+		Tools:              tools,
+		ToolChoice:         choice,
+		Temperature:        c.Temperature,
+		MaxTokens:          c.MaxTokens,
+		ReasoningEffort:    effort,
+		ChatTemplateKwargs: map[string]string{"reasoning_effort": effort},
 	})
 	if err != nil {
 		return Message{}, ChatStats{}, fmt.Errorf("marshal request: %w", err)
