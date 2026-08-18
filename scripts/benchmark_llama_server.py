@@ -173,7 +173,7 @@ def run_case(
         tool_calls = assistant.get("tool_calls") or []
         if tool_calls:
             messages.append({"role": "tool", "tool_call_id": tool_calls[0].get("id", "benchmark"), "content": tool_result})
-        messages.append({"role": "system", "content": "Do not call another tool in this turn. Reply with one short sentence."})
+        messages.append({"role": "user", "content": "Do not call another tool in this turn. Reply with one short sentence."})
         second_elapsed, second_response = request_once(api_url, model, messages, tools, None, output_tokens, temperature, timeout)
         combined = dict(second_response)
         combined["_first_elapsed"] = first_elapsed
@@ -217,11 +217,11 @@ def main() -> int:
         print("benchmark tools JSON must contain a non-empty array", file=sys.stderr)
         return 2
 
-    print("case,target_tokens,actual_tokens,run,latency_s,completion_tokens,response_kind,response_bytes")
+    print("case,target_tokens,base_prompt_tokens,run,latency_s,completion_tokens,response_kind,response_bytes")
     summaries: dict[str, dict[int, list[float]]] = {case: {} for case in args.cases}
 
     for target in args.tokens:
-        base_prompt, _ = calibrate(args.url, seed, target, args.timeout)
+        base_prompt, base_prompt_tokens = calibrate(args.url, seed, target, args.timeout)
         for case in args.cases:
             measurements: list[float] = []
             for _ in range(args.warmup):
@@ -233,16 +233,16 @@ def main() -> int:
 
             for run in range(1, args.runs + 1):
                 try:
-                    elapsed, response, actual_tokens = run_case(case, args.url, model=args.model, prompt=base_prompt, tools=tools, tool_result=tool_result, output_tokens=args.output_tokens, temperature=args.temperature, timeout=args.timeout)
+                    elapsed, response, _ = run_case(case, args.url, model=args.model, prompt=base_prompt, tools=tools, tool_result=tool_result, output_tokens=args.output_tokens, temperature=args.temperature, timeout=args.timeout)
                 except (urllib.error.HTTPError, urllib.error.URLError, TimeoutError, json.JSONDecodeError, ValueError) as exc:
                     print(f"benchmark request failed case={case} target={target}: {exc}", file=sys.stderr)
                     return 1
                 completion_tokens, response_bytes = response_stats(response)
                 measurements.append(elapsed)
                 summaries[case].setdefault(target, []).append(elapsed)
-                actual_text = str(actual_tokens) if actual_tokens is not None else "?"
+                base_text = str(base_prompt_tokens) if base_prompt_tokens is not None else "?"
                 completion_text = str(completion_tokens) if completion_tokens is not None else "?"
-                print(f"{case},{target},{actual_text},{run},{elapsed:.3f},{completion_text},{classify_response(response)},{response_bytes}")
+                print(f"{case},{target},{base_text},{run},{elapsed:.3f},{completion_text},{classify_response(response)},{response_bytes}")
 
             print(f"# case={case} target={target} median={statistics.median(measurements):.3f}s min={min(measurements):.3f}s max={max(measurements):.3f}s", file=sys.stderr)
 
