@@ -38,9 +38,9 @@ type TraceEvent struct {
 }
 
 type ExecutionBudget struct {
-	MaxSteps      int
-	MaxDuration   time.Duration
-	MaxToolCalls  int
+	MaxSteps     int
+	MaxDuration  time.Duration
+	MaxToolCalls int
 }
 
 type Observation struct {
