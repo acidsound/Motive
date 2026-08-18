@@ -4,27 +4,56 @@ import (
 	"context"
 	"flag"
 	"fmt"
+	"net/http"
 	"os"
 	"strings"
 	"time"
 
+	"github.com/acidsound/Motive/internal/config"
 	"github.com/acidsound/Motive/internal/model"
 	"github.com/acidsound/Motive/internal/runtime"
+	"github.com/acidsound/Motive/internal/session"
 	"github.com/acidsound/Motive/internal/tui"
 )
+
+func newHTTPClient() *http.Client {
+	return &http.Client{Timeout: 10 * time.Minute}
+}
 
 func main() {
 	tuiMode := flag.Bool("tui", false, "start the terminal UI")
 	verbose := flag.Bool("v", false, "show execution telemetry")
+	resume := flag.Bool("r", false, "open the TUI session picker on start")
 	flag.Parse()
 
-	rt := runtime.New(model.NewFromEnv())
+	cfg, err := config.Load()
+	if err != nil {
+		fmt.Fprintf(os.Stderr, "config: %v\n", err)
+		os.Exit(1)
+	}
+	sess, err := session.NewStore(cfg.StateDir + "/sessions")
+	if err != nil {
+		fmt.Fprintf(os.Stderr, "sessions: %v\n", err)
+		os.Exit(1)
+	}
+
+	client := &model.Client{
+		BaseURL:         strings.TrimRight(cfg.Default.BaseURL, "/"),
+		Model:           cfg.Default.Model,
+		APIKey:          cfg.Default.APIKey,
+		Temperature:     envFloat("MOTIVE_TEMPERATURE", 0.6),
+		MaxTokens:       envInt("MOTIVE_MAX_TOKENS", 0),
+		ReasoningEffort: cfg.Default.ReasoningEffort,
+		HTTP:            newHTTPClient(),
+	}
+
+	rt := runtime.New(client)
 	if *verbose {
 		rt.Trace = verboseTrace
 	}
 
 	if *tuiMode || flag.NArg() == 0 {
-		if err := tui.Run(rt); err != nil {
+		if err := tui.Run(rt, cfg, sess, *resume); err != nil {
 			fmt.Fprintln(os.Stderr, err)
 			os.Exit(1)
 		}
@@ -85,4 +114,28 @@ func shortRevision(revision string) string {
 		return revision[:12]
 	}
 	return revision
+}
+
+func envFloat(key string, fallback float64) float64 {
+	v := strings.TrimSpace(os.Getenv(key))
+	if v == "" {
+		return fallback
+	}
+	var parsed float64
+	if _, err := fmt.Sscanf(v, "%f", &parsed); err != nil {
+		return fallback
+	}
+	return parsed
+}
+
+func envInt(key string, fallback int) int {
+	v := strings.TrimSpace(os.Getenv(key))
+	if v == "" {
+		return fallback
+	}
+	var parsed int
+	if _, err := fmt.Sscanf(v, "%d", &parsed); err != nil {
+		return fallback
+	}
+	return parsed
 }

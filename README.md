@@ -25,6 +25,7 @@ Each user request starts with a fresh model context. The persistent world is the
 go build -o motive ./cmd/motive
 ./motive --tui
 ./motive "inspect this project and fix the failing test"
+./motive --tui -r   # open the session picker on start
 ```
 
 Configuration:
@@ -34,9 +35,55 @@ MOTIVE_BASE_URL   default: http://127.0.0.1:8080/v1
 MOTIVE_MODEL      default: Qwen3.8-27B
 MOTIVE_API_KEY    optional
 MOTIVE_WORKSPACE  default: current directory
+MOTIVE_STATE_DIR  session storage, default: ~/.motive
 ```
 
 `OPENAI_BASE_URL`, `OPENAI_MODEL`, and `OPENAI_API_KEY` are accepted as fallbacks.
+
+### Providers
+
+Named providers and the active one can be set in a TOML file (default
+`~/.config/motive/config.toml`, override with `MOTIVE_CONFIG`):
+
+```toml
+default_provider = "dp4090"
+
+[[providers]]
+name = "dp4090"
+base_url = "http://100.72.102.121:8080/v1"
+model = "Qwen3.8-27B-UD-Q4_K_XL.gguf"
+reasoning_effort = "low"
+
+[[providers]]
+name = "gateway"
+base_url = "http://127.0.0.1:8787/v1"
+model = "qwen3.8-27b"
+models = ["deepseek-v4-pro", "gemma-4-31b"]
+```
+
+`model` is the default id; `models` adds extra selectable ids. Environment
+variables (`MOTIVE_BASE_URL`, `MOTIVE_MODEL`, `MOTIVE_API_KEY`) always override
+the active provider. Without a config file, the environment variables form a
+single "default" provider.
+
+### TUI
+
+The TUI streams model output live with reasoning shown dimmed, renders
+lightweight markdown, and persists every turn to a JSONL session file that
+`-r` can resume. Controls (rebindable via `MOTIVE_KEY_<NAME>`, e.g.
+`MOTIVE_KEY_SCROLL_UP=ctrl+u`):
+
+```text
+enter          run            ctrl+e         cycle reasoning effort
+shift+enter    newline        ctrl+tab       cycle provider
+ctrl+m         model picker   ctrl+r         session picker
+ctrl+d         git diff view  ctrl+s         side panel (files/git/todo)
+ctrl+k / ctrl+j     scroll up / down
+alt+u / alt+d       page up / down
+up / down           prompt history (empty input)
+ctrl+g         bookmark       ctrl+l         clear transcript
+esc / ctrl+c   quit
+```
 
 ## Tools exposed to the model
 

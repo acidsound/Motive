@@ -87,7 +87,31 @@ A successful execution may therefore be associated with a base revision and a re
 
 Whether every externally visible workspace mutation must result in a commit is **[UNKNOWN]**; the current runtime does not establish such an invariant.
 
-## 7. Reasoning effort
+## 7. Configuration and providers
+
+Motive supports named providers configured via a TOML file (default path `~/.config/motive/config.toml`, overridable with `MOTIVE_CONFIG`). Each provider specifies a base URL, a default model, optional additional model IDs, an optional API key, and an optional reasoning effort. **[SOURCE]**
+
+The active provider is selected by the `default_provider` field in the config file; if absent, the first listed provider is active. **[SOURCE]**
+
+Environment variables (`MOTIVE_BASE_URL`, `MOTIVE_MODEL`, `MOTIVE_API_KEY`, `MOTIVE_REASONING_EFFORT`) always override the active provider's file values, preserving the historical single-endpoint behavior. **[SOURCE]**
+
+Without a config file, environment variables form a single implicit "default" provider. **[SOURCE]**
+
+The TUI allows the user to cycle providers (`Ctrl+Tab`) or select a specific provider/model combination via a picker (`Ctrl+M`). Switching providers changes the endpoint, model, and reasoning effort for subsequent turns. **[SOURCE]**
+
+The state directory for session storage defaults to `~/.motive` and is overridable with `MOTIVE_STATE_DIR`. **[SOURCE]**
+
+## 8. Session persistence
+
+Motive persists conversation transcripts as append-only JSONL files under the state directory. Each entry records a timestamp, role (user/assistant/error), content, optional reasoning, optional tool calls, base/result Git revisions, and elapsed time. **[SOURCE]**
+
+A new session is created on the first user submission in the TUI. Subsequent turns append to the same session file. **[SOURCE]**
+
+The TUI provides a session picker (`Ctrl+R` or `--tui -r`) that lists prior sessions by ID, creation time, preview text, revision, and tool-call count. Selecting a session restores its transcript into the TUI view. **[SOURCE][TEST]**
+
+Session persistence is a transcript record, not a model context. Resuming a session does not restore model context; the next execution still starts with a fresh model context per the invariant in §3. **[SOURCE][DECISION]**
+
+## 9. Reasoning effort
 
 Reasoning effort is a runtime model parameter. The supported normalized values in the current Motive/Qwen deployment contract are:
 
@@ -107,7 +131,7 @@ The TUI exposes the three supported levels and cycles them with `Ctrl+E`. **[SOU
 
 The precise mapping between these symbolic effort levels and model-specific compute is provider/model dependent and remains **[UNKNOWN]** at the Motive semantic layer.
 
-## 8. Temperature
+## 10. Temperature
 
 Temperature is an explicit model request parameter. The configured value is serialized even when it is `0`. **[SOURCE]**
 
@@ -115,7 +139,7 @@ The current default is `0.6`. **[SOURCE][DECISION]**
 
 The semantic meaning of a particular temperature value remains that of the underlying model server; Motive does not define model-specific decoding behavior. **[SOURCE]**
 
-## 9. Execution budget and termination
+## 11. Execution budget and termination
 
 Every execution has three bounded resources: maximum model/tool-loop steps, maximum elapsed duration, and maximum tool calls. The defaults are 32 steps, 30 minutes, and 128 tool calls. **[SOURCE]**
 
@@ -127,7 +151,7 @@ The execution budget is a safety boundary on the runtime loop. It is not equival
 
 A provider-specific per-turn reasoning budget remains outside Motive's execution budget semantics. **[SOURCE][DECISION]**
 
-## 10. Failure and recovery
+## 12. Failure and recovery
 
 An empty user request is rejected before execution. **[SOURCE]**
 
@@ -141,7 +165,7 @@ The configured default is restored after the recovery turn. **[SOURCE]**
 
 Repeated-failure escalation beyond this one-turn recovery policy is **[UNKNOWN]**.
 
-## 11. Observation and telemetry
+## 13. Observation and telemetry
 
 The runtime exposes trace events containing execution state such as:
 
@@ -163,7 +187,7 @@ The model client understands llama-server-style timing information including pro
 
 Telemetry is observational data. It does not by itself imply that Motive has learned a policy or autonomously optimized itself. **[DECISION]**
 
-## 12. Self-observation
+## 14. Self-observation
 
 Self-observation is now a defined runtime capability: after each tool-bearing turn, Motive provides the model with a bounded, structured observation containing execution budget usage, tool failures, recent model latency/prediction timing, current reasoning effort, elapsed/remaining time, and Git revisions. **[SOURCE][DECISION]**
 
@@ -171,7 +195,7 @@ The observation is deliberately compact and does not include hidden chain-of-tho
 
 Automatic anomaly detection or policy learning from these observations is not implemented and remains **[UNKNOWN]**.
 
-## 13. Self-modification
+## 15. Self-modification
 
 Motive can expose file-writing, deletion, shell, and Git operations to the model, so the model can modify its workspace when the request and tool permissions allow it. **[SOURCE]**
 
@@ -181,7 +205,7 @@ Motive does not automatically commit or push model changes. The model must invok
 
 Rollback, approval workflows, and automatic self-rewrite policies are **[UNKNOWN]** and are intentionally not part of the current self-modification contract.
 
-## 14. Validated current state
+## 16. Validated current state
 
 The project has reached a verified baseline suitable for continuing implementation:
 
@@ -198,7 +222,17 @@ The benchmark is therefore retained as diagnostic tooling, not as the next devel
 
 The observed long Motive turns with thousands of predicted reasoning tokens establish a concrete investigation target, but do not by themselves establish the root cause. The root cause remains **[UNKNOWN]** until reproduced and localized with Motive telemetry.
 
-## 15. Stable invariants
+## 17. Terminal UI
+
+The TUI is a first-class interface for interactive execution. It streams model output live, renders lightweight markdown (headings, code blocks, lists, bold, inline code, blockquotes, horizontal rules), and displays reasoning in a dimmed style. **[SOURCE]**
+
+The TUI supports scrollback, prompt history navigation, transcript bookmarks, tool-call collapsing, a git diff overlay, and a side panel showing workspace files, git status, and TODO items. **[SOURCE]**
+
+All key bindings are rebindable via `MOTIVE_KEY_<NAME>` environment variables. Defaults follow a jcode-inspired layout. **[SOURCE]**
+
+The TUI status bar displays the active model, reasoning effort, step/tool/elapsed counters, execution budget, Git revision range, session ID, and panel state. **[SOURCE]**
+
+## 18. Stable invariants
 
 1. **Fresh request context:** a user request is executed from a newly constructed model context rather than assumed prior chat history. **[SOURCE]**
 2. **Workspace as persistent world:** files and Git state are the persistent execution state. **[SOURCE]**
@@ -210,10 +244,12 @@ The observed long Motive turns with thousands of predicted reasoning tokens esta
 8. **Recovery escalation is temporary:** failure-driven `xhigh` escalation does not replace the configured default effort. **[SOURCE]**
 9. **Telemetry is observational:** execution telemetry describes what happened and is not itself evidence that autonomous adaptation is implemented. **[DECISION]**
 10. **Runtime self-observation is bounded:** model-visible observations contain execution metadata, not hidden reasoning content. **[DECISION]**
-11. **Self-modification is model-directed:** workspace changes occur through the existing tools and are not silently committed or pushed by the runtime. **[SOURCE]**
-12. **Validated baseline:** formatting, tests, vetting, and diff checks are expected to remain green before advancing to the next semantic layer. **[TEST][DECISION]**
+11. **Self-modification is model-directed:** workspace changes occur through the existing tools and are not silently committed or pushed by the runtime. **[SOURCE][DECISION]**
+12. **Session persistence is transcript-only:** JSONL session files record what happened but do not restore model context; each execution still starts fresh. **[SOURCE][DECISION]**
+13. **Provider switching is user-directed:** endpoint/model changes happen only via explicit user action in the TUI or config file; the runtime never switches providers autonomously. **[SOURCE][DECISION]**
+14. **Validated baseline:** formatting, tests, vetting, and diff checks are expected to remain green before advancing to the next semantic layer. **[TEST][DECISION]**
 
-## 16. Explicitly unresolved semantics
+## 19. Explicitly unresolved semantics
 
 These areas must remain marked unresolved until verified by source, tests, or explicit project decisions:
 
@@ -223,11 +259,11 @@ These areas must remain marked unresolved until verified by source, tests, or ex
 - automatic anomaly detection or policy learning from telemetry
 - rollback semantics for autonomous modifications
 - whether and when an execution must create a Git commit
-- cross-session/project memory beyond the repository state
+- cross-session/project memory beyond the repository state (session persistence is a transcript record, not learned memory)
 - root cause of unusually long reasoning generations in real Motive executions
 - whether the current self-observation data is sufficient for reliable anomaly detection
 
-## 17. Next semantic frontier
+## 20. Next semantic frontier
 
 The next work should proceed in this order:
 
@@ -240,7 +276,7 @@ The next work should proceed in this order:
 
 This ordering is a project decision, not a claim that later capabilities are already implemented. **[DECISION]**
 
-## 18. Context reconstruction rule
+## 21. Context reconstruction rule
 
 This document is intended to be sufficient to reconstruct the semantic identity and current execution model of Motive without relying on the conversation that produced it.
 

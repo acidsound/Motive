@@ -171,6 +171,20 @@ func (c *Client) SetReasoningEffort(effort string) {
 	c.ReasoningEffort = normalizeEffort(effort)
 }
 
+// SetEndpoint switches the active endpoint. Empty fields keep their current
+// value so callers can change just one of base URL, model, or API key.
+func (c *Client) SetEndpoint(baseURL, model, apiKey string) {
+	if strings.TrimSpace(baseURL) != "" {
+		c.BaseURL = strings.TrimRight(baseURL, "/")
+	}
+	if strings.TrimSpace(model) != "" {
+		c.Model = model
+	}
+	if apiKey != "" {
+		c.APIKey = apiKey
+	}
+}
+
 func (c *Client) GetReasoningEffort() string {
 	return c.ReasoningEffort
 }

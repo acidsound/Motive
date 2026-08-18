@@ -1,0 +1,201 @@
+// Package session persists conversation transcripts as JSONL files so the TUI
+// can resume earlier work and record git revisions per turn.
+package session
+
+import (
+	"bufio"
+	"encoding/json"
+	"fmt"
+	"os"
+	"path/filepath"
+	"sort"
+	"strings"
+	"time"
+)
+
+// Entry is one persisted transcript line: a user request, an assistant reply,
+// a tool line, or an error.
+type Entry struct {
+	TS             time.Time `json:"ts"`
+	Role           string    `json:"role"` // user | assistant | error | tool
+	Content        string    `json:"content,omitempty"`
+	Reasoning      string    `json:"reasoning,omitempty"`
+	Tools          []string  `json:"tools,omitempty"`
+	BaseRevision   string    `json:"base_revision,omitempty"`
+	ResultRevision string    `json:"result_revision,omitempty"`
+	ElapsedMS      int64     `json:"elapsed_ms,omitempty"`
+}
+
+// Summary describes a session for the picker without loading its transcript.
+type Summary struct {
+	ID             string
+	Path           string
+	Created        time.Time
+	Updated        time.Time
+	Preview        string
+	BaseRevision   string
+	ResultRevision string
+	ToolCalls      int
+	Lines          int
+}
+
+// Store writes and reads session transcripts under a single directory.
+type Store struct{ Dir string }
+
+func NewStore(dir string) (*Store, error) {
+	if err := os.MkdirAll(dir, 0o755); err != nil {
+		return nil, err
+	}
+	return &Store{Dir: dir}, nil
+}
+
+func (s *Store) path(id string) string {
+	return filepath.Join(s.Dir, id+".jsonl")
+}
+
+// New creates an empty session and returns its id.
+func (s *Store) New() (string, error) {
+	id := time.Now().UTC().Format("20060102-150405") + "-" + shortID()
+	f, err := os.OpenFile(s.path(id), os.O_CREATE|os.O_EXCL|os.O_WRONLY, 0o644)
+	if err != nil {
+		return "", err
+	}
+	if err := f.Close(); err != nil {
+		return "", err
+	}
+	return id, nil
+}
+
+// Append adds one entry to a session file. Sessions are append-only; a resumed
+// session continues with the same file.
+func (s *Store) Append(id string, e Entry) error {
+	if id == "" || strings.Contains(id, "/") || strings.Contains(id, "..") {
+		return fmt.Errorf("invalid session id %q", id)
+	}
+	f, err := os.OpenFile(s.path(id), os.O_APPEND|os.O_CREATE|os.O_WRONLY, 0o644)
+	if err != nil {
+		return err
+	}
+	defer f.Close()
+	enc := json.NewEncoder(f)
+	return enc.Encode(e)
+}
+
+// List returns sessions newest first.
+func (s *Store) List() ([]Summary, error) {
+	entries, err := os.ReadDir(s.Dir)
+	if err != nil {
+		return nil, err
+	}
+	var out []Summary
+	for _, de := range entries {
+		if de.IsDir() || filepath.Ext(de.Name()) != ".jsonl" {
+			continue
+		}
+		id := strings.TrimSuffix(de.Name(), ".jsonl")
+		sum, err := s.summarize(id, de)
+		if err != nil {
+			continue
+		}
+		out = append(out, sum)
+	}
+	sort.Slice(out, func(i, j int) bool { return out[i].Updated.After(out[j].Updated) })
+	return out, nil
+}
+
+func (s *Store) summarize(id string, de os.DirEntry) (Summary, error) {
+	f, err := os.Open(filepath.Join(s.Dir, de.Name()))
+	if err != nil {
+		return Summary{}, err
+	}
+	defer f.Close()
+	sum := Summary{ID: id, Path: filepath.Join(s.Dir, de.Name())}
+	sc := bufio.NewScanner(f)
+	sc.Buffer(make([]byte, 1<<20), 1<<20)
+	line := 0
+	for sc.Scan() {
+		line++
+		var e Entry
+		if err := json.Unmarshal(sc.Bytes(), &e); err != nil {
+			continue
+		}
+		sum.Lines++
+		if e.Role == "tool" {
+			sum.ToolCalls++
+		}
+		sum.ToolCalls += len(e.Tools)
+		if e.BaseRevision != "" && sum.BaseRevision == "" {
+			sum.BaseRevision = e.BaseRevision
+		}
+		if e.ResultRevision != "" {
+			sum.ResultRevision = e.ResultRevision
+		}
+		if sum.Created.IsZero() {
+			sum.Created = e.TS
+		}
+		if !e.TS.IsZero() {
+			sum.Updated = e.TS
+		}
+		if sum.Preview == "" && e.Role == "user" {
+			sum.Preview = firstLine(e.Content)
+		}
+	}
+	if err := sc.Err(); err != nil {
+		return Summary{}, err
+	}
+	if info, err := de.Info(); err == nil {
+		if sum.Updated.IsZero() {
+			sum.Updated = info.ModTime()
+		}
+		if sum.Created.IsZero() {
+			sum.Created = info.ModTime()
+		}
+	}
+	if sum.Preview == "" {
+		sum.Preview = "(no user message)"
+	}
+	return sum, nil
+}
+
+// Load reads a session transcript in order.
+func (s *Store) Load(id string) ([]Entry, error) {
+	if id == "" || strings.Contains(id, "/") || strings.Contains(id, "..") {
+		return nil, fmt.Errorf("invalid session id %q", id)
+	}
+	f, err := os.Open(s.path(id))
+	if err != nil {
+		return nil, err
+	}
+	defer f.Close()
+	var out []Entry
+	sc := bufio.NewScanner(f)
+	sc.Buffer(make([]byte, 1<<20), 1<<20)
+	for sc.Scan() {
+		if strings.TrimSpace(sc.Text()) == "" {
+			continue
+		}
+		var e Entry
+		if err := json.Unmarshal(sc.Bytes(), &e); err != nil {
+			continue
+		}
+		out = append(out, e)
+	}
+	return out, sc.Err()
+}
+
+func firstLine(s string) string {
+	s = strings.TrimSpace(s)
+	if i := strings.IndexByte(s, '\n'); i >= 0 {
+		s = s[:i]
+	}
+	s = strings.TrimSpace(s)
+	r := []rune(s)
+	if len(r) > 80 {
+		return string(r[:80]) + "…"
+	}
+	return s
+}
+
+func shortID() string {
+	return fmt.Sprintf("%d", time.Now().UnixNano()%1000000)
+}
