@@ -108,21 +108,31 @@ func execute(rt *runtime.Runtime, request string) tea.Cmd {
 	}
 }
 
+// trimOutput keeps only the most recent output that fits in the available
+// screen lines. Output entries may span multiple lines, so lines are counted
+// instead of entries.
 func (m *model) trimOutput() {
 	available := m.height - m.inputHeight - 2
 	if available < 1 {
 		return
 	}
-	if len(m.output) > available {
-		m.output = m.output[len(m.output)-available:]
+	used := 0
+	for i := len(m.output) - 1; i >= 0; i-- {
+		used += strings.Count(m.output[i], "\n") + 1
+		if used > available {
+			m.output = m.output[i+1:]
+			return
+		}
 	}
 }
 
 func (m model) View() tea.View {
 	var b strings.Builder
+	lines := 0
 	for _, line := range m.output {
 		b.WriteString(line)
 		b.WriteString("\n")
+		lines += strings.Count(line, "\n") + 1
 	}
 	if m.busy {
 		b.WriteString("working…\n")
@@ -134,7 +144,9 @@ func (m model) View() tea.View {
 	v.AltScreen = true
 	if cursor := m.input.Cursor(); cursor != nil {
 		cursor.X += 2
-		cursor.Y += len(m.output) + 1
+		// The input starts after all rendered output lines, the optional
+		// "working…" line, and the blank line before the prompt.
+		cursor.Y += lines + 1
 		if m.busy {
 			cursor.Y++
 		}
