@@ -4,6 +4,7 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
+	"strings"
 	"testing"
 )
 
@@ -40,5 +41,30 @@ func TestSearchMatch(t *testing.T) {
 	}
 	if out == "" {
 		t.Fatal("Search output is empty, want match")
+	}
+}
+
+func TestGitHEADOutsideRepo(t *testing.T) {
+	w := New(t.TempDir())
+	if head := w.GitHEAD(); head != "" {
+		t.Fatalf("GitHEAD outside a repository = %q, want empty", head)
+	}
+}
+
+func TestSearchLiteralRegexMetacharacters(t *testing.T) {
+	if _, err := exec.LookPath("rg"); err != nil {
+		t.Skip("rg not available")
+	}
+	dir := t.TempDir()
+	if err := os.WriteFile(filepath.Join(dir, "a.txt"), []byte("value is a+b (x)\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	w := New(dir)
+	out, err := w.Search("a+b (x)")
+	if err != nil {
+		t.Fatalf("Search returned error: %v", err)
+	}
+	if !strings.Contains(out, "a.txt") {
+		t.Fatalf("Search output = %q, want a match in a.txt", out)
 	}
 }
