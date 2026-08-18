@@ -2,6 +2,7 @@ package tui
 
 import (
 	"context"
+	"fmt"
 	"strings"
 	"time"
 
@@ -73,6 +74,13 @@ func (m model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			}
 			return m, tea.Quit
 
+		case "ctrl+e":
+			if m.busy {
+				return m, nil
+			}
+			m.cycleEffort()
+			return m, nil
+
 		case "enter":
 			if m.busy {
 				return m, nil
@@ -99,6 +107,22 @@ func (m model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 	return m, cmd
 }
 
+func (m *model) cycleEffort() {
+	current := m.rt.Model.GetReasoningEffort()
+	next := "low"
+	switch current {
+	case "low":
+		next = "medium"
+	case "medium":
+		next = "xhigh"
+	case "xhigh":
+		next = "low"
+	default:
+		next = "low"
+	}
+	m.rt.Model.SetReasoningEffort(next)
+}
+
 func execute(rt *runtime.Runtime, request string) tea.Cmd {
 	return func() tea.Msg {
 		ctx, cancel := context.WithTimeout(context.Background(), 30*time.Minute)
@@ -108,11 +132,8 @@ func execute(rt *runtime.Runtime, request string) tea.Cmd {
 	}
 }
 
-// trimOutput keeps only the most recent output that fits in the available
-// screen lines. Output entries may span multiple lines, so lines are counted
-// instead of entries.
 func (m *model) trimOutput() {
-	available := m.height - m.inputHeight - 2
+	available := m.height - m.inputHeight - 3
 	if available < 1 {
 		return
 	}
@@ -139,13 +160,13 @@ func (m model) View() tea.View {
 	}
 	b.WriteString("\n> ")
 	b.WriteString(m.input.View())
+	b.WriteString("\n")
+	b.WriteString(fmt.Sprintf("reasoning: %s   [ctrl+e]   budget: %d steps / %s", m.rt.Model.GetReasoningEffort(), m.rt.Budget.MaxSteps, m.rt.Budget.MaxDuration.Round(time.Minute)))
 
 	v := tea.NewView(b.String())
 	v.AltScreen = true
 	if cursor := m.input.Cursor(); cursor != nil {
 		cursor.X += 2
-		// The input starts after all rendered output lines, the optional
-		// "working…" line, and the blank line before the prompt.
 		cursor.Y += lines + 1
 		if m.busy {
 			cursor.Y++
