@@ -62,8 +62,15 @@ def info(resp):
         'message': msg,
     }
 
-def call(v1, model, msgs, tools=None, choice=None, out=256, temp=0.0, timeout=300):
-    p = {'model': model, 'messages': msgs, 'max_tokens': out, 'temperature': temp}
+def call(v1, model, msgs, tools=None, choice=None, out=256, temp=0.6, effort='low', timeout=300):
+    p = {
+        'model': model,
+        'messages': msgs,
+        'max_tokens': out,
+        'temperature': temp,
+        'reasoning_effort': effort,
+        'chat_template_kwargs': {'reasoning_effort': effort},
+    }
     if tools is not None: p['tools'] = tools
     if choice is not None: p['tool_choice'] = choice
     t = time.perf_counter()
@@ -78,6 +85,8 @@ def main():
     ap.add_argument('--runs', type=int, default=3)
     ap.add_argument('--warmup', type=int, default=1)
     ap.add_argument('--output-tokens', type=int, default=256)
+    ap.add_argument('--temperature', type=float, default=0.6)
+    ap.add_argument('--reasoning-effort', choices=['low','medium','xhigh'], default='low')
     ap.add_argument('--timeout', type=float, default=300)
     ap.add_argument('--dump-roundtrip', action='store_true')
     args = ap.parse_args()
@@ -144,17 +153,17 @@ def _run(case,args,prompt,reasoning,tools,tool_result,dump=False):
     system={'role':'system','content':'You are a benchmark participant. Follow the requested task.'}
     if case=='plain':
         msgs=[system,{'role':'user','content':prompt+'\nReply briefly.'}]
-        e,r=call(args.url,args.model,msgs,out=args.output_tokens,timeout=args.timeout); return e,r,'ok'
+        e,r=call(args.url,args.model,msgs,out=args.output_tokens,temp=args.temperature,effort=args.reasoning_effort,timeout=args.timeout); return e,r,'ok'
     if case=='reasoning':
         msgs=[system,{'role':'user','content':prompt+'\n'+reasoning}]
-        e,r=call(args.url,args.model,msgs,out=args.output_tokens,timeout=args.timeout); return e,r,'ok'
+        e,r=call(args.url,args.model,msgs,out=args.output_tokens,temp=args.temperature,effort=args.reasoning_effort,timeout=args.timeout); return e,r,'ok'
     if case=='tools':
         msgs=[system,{'role':'user','content':prompt+'\nDo not use any tools. Reply briefly.'}]
-        e,r=call(args.url,args.model,msgs,tools=tools,out=args.output_tokens,timeout=args.timeout); return e,r,'ok'
+        e,r=call(args.url,args.model,msgs,tools=tools,out=args.output_tokens,temp=args.temperature,effort=args.reasoning_effort,timeout=args.timeout); return e,r,'ok'
     if case in ('required_tool','roundtrip'):
         tool_prompt = 'Use read_file exactly once to inspect README.md. The tool arguments must be valid JSON with path set to README.md.'
         msgs=[system,{'role':'user','content':prompt+'\n'+tool_prompt}]
-        e1,r1=call(args.url,args.model,msgs,tools=tools,choice='required',out=args.output_tokens,timeout=args.timeout)
+        e1,r1=call(args.url,args.model,msgs,tools=tools,choice='required',out=args.output_tokens,temp=args.temperature,effort=args.reasoning_effort,timeout=args.timeout)
         i1=info(r1)
         if i1['calls']==0:
             return e1,r1,'no_tool_call'
@@ -178,8 +187,8 @@ def _run(case,args,prompt,reasoning,tools,tool_result,dump=False):
             print('\n[roundtrip:first_response]', file=sys.stderr)
             pprint.pp(r1, stream=sys.stderr, width=140)
             print('\n[roundtrip:second_request]', file=sys.stderr)
-            pprint.pp({'model':args.model,'messages':msgs,'tools':tools,'max_tokens':args.output_tokens,'temperature':0.0}, stream=sys.stderr, width=140)
-        e2,r2=call(args.url,args.model,msgs,tools=tools,out=args.output_tokens,timeout=args.timeout)
+            pprint.pp({'model':args.model,'messages':msgs,'tools':tools,'tool_choice':'auto','max_tokens':args.output_tokens,'temperature':args.temperature,'reasoning_effort':args.reasoning_effort,'chat_template_kwargs':{'reasoning_effort':args.reasoning_effort}}, stream=sys.stderr, width=140)
+        e2,r2=call(args.url,args.model,msgs,tools=tools,out=args.output_tokens,temp=args.temperature,effort=args.reasoning_effort,timeout=args.timeout)
         r2['_first_latency']=e1
         r2['_second_latency']=e2
         return e1+e2,r2,'ok'
