@@ -42,6 +42,10 @@ func (w *Workspace) path(name string) (string, error) {
 }
 
 func (w *Workspace) Read(name string) (string, error) {
+	return w.ReadContext(context.Background(), name)
+}
+
+func (w *Workspace) ReadContext(ctx context.Context, name string) (string, error) {
 	p, err := w.path(name); if err != nil { return "", err }
 	data, err := os.ReadFile(p); if err != nil { return "", fmt.Errorf("read %s: %w", name, err) }
 	if len(data) > 8<<20 { return "", fmt.Errorf("file too large: %s", name) }
@@ -49,21 +53,37 @@ func (w *Workspace) Read(name string) (string, error) {
 }
 
 func (w *Workspace) Write(name, content string) error {
+	return w.WriteContext(context.Background(), name, content)
+}
+
+func (w *Workspace) WriteContext(ctx context.Context, name, content string) error {
+	if err := ctx.Err(); err != nil { return err }
 	p, err := w.path(name); if err != nil { return err }
 	if err := os.MkdirAll(filepath.Dir(p), 0o755); err != nil { return err }
+	if err := ctx.Err(); err != nil { return err }
 	return os.WriteFile(p, []byte(content), 0o644)
 }
 
 func (w *Workspace) Delete(name string) error {
+	return w.DeleteContext(context.Background(), name)
+}
+
+func (w *Workspace) DeleteContext(ctx context.Context, name string) error {
+	if err := ctx.Err(); err != nil { return err }
 	p, err := w.path(name); if err != nil { return err }
 	return os.Remove(p)
 }
 
 func (w *Workspace) List(name string) (string, error) {
+	return w.ListContext(context.Background(), name)
+}
+
+func (w *Workspace) ListContext(ctx context.Context, name string) (string, error) {
 	p, err := w.path(name); if err != nil { return "", err }
 	var out strings.Builder
 	err = filepath.WalkDir(p, func(path string, d fs.DirEntry, err error) error {
 		if err != nil { return err }
+		if err := ctx.Err(); err != nil { return err }
 		if path == w.Root { return nil }
 		rel, _ := filepath.Rel(w.Root, path)
 		if d.IsDir() && (d.Name() == ".git" || d.Name() == "node_modules") { return fs.SkipDir }
@@ -76,12 +96,15 @@ func (w *Workspace) List(name string) (string, error) {
 }
 
 func (w *Workspace) Search(query string) (string, error) {
+	return w.SearchContext(context.Background(), query)
+}
+
+func (w *Workspace) SearchContext(ctx context.Context, query string) (string, error) {
 	if query == "" { return "", fmt.Errorf("query is required") }
 	if _, err := exec.LookPath("rg"); err == nil {
-		out, err := w.command(30*time.Second, "rg", "-n", "--hidden", "--glob", "!.git", "--glob", "!node_modules", query, ".")
+		out, err := w.command(ctx, 30*time.Second, "rg", "-n", "--hidden", "--glob", "!.git", "--glob", "!node_modules", query, ".")
 		if err != nil {
-			// rg exits 1 when no files match; that is an empty result, not a failure.
-			if strings.Contains(err.Error(), "exit status 1") {
+			if exitErr, ok := err.(*exec.ExitError); ok && exitErr.ExitCode() == 1 {
 				return "", nil
 			}
 			return out, err
@@ -91,6 +114,7 @@ func (w *Workspace) Search(query string) (string, error) {
 	var out strings.Builder
 	err := filepath.WalkDir(w.Root, func(path string, d fs.DirEntry, err error) error {
 		if err != nil { return err }
+		if err := ctx.Err(); err != nil { return err }
 		if d.IsDir() && (d.Name() == ".git" || d.Name() == "node_modules") { return fs.SkipDir }
 		if d.IsDir() { return nil }
 		data, err := os.ReadFile(path); if err != nil || bytes.IndexByte(data, 0) >= 0 { return nil }
@@ -104,15 +128,19 @@ func (w *Workspace) Search(query string) (string, error) {
 }
 
 func (w *Workspace) Shell(command string) (string, error) {
-	if command == "" { return "", fmt.Errorf("command is required") }
-	if runtime.GOOS == "windows" {
-		return w.command(2*time.Minute, "powershell", "-NoProfile", "-Command", command)
-	}
-	return w.command(2*time.Minute, "bash", "-lc", command)
+	return w.ShellContext(context.Background(), command)
 }
 
-func (w *Workspace) command(timeout time.Duration, name string, args ...string) (string, error) {
-	ctx, cancel := context.WithTimeout(context.Background(), timeout); defer cancel()
+func (w *Workspace) ShellContext(ctx context.Context, command string) (string, error) {
+	if command == "" { return "", fmt.Errorf("command is required") }
+	if runtime.GOOS == "windows" {
+		return w.command(ctx, 2*time.Minute, "powershell", "-NoProfile", "-Command", command)
+	}
+	return w.command(ctx, 2*time.Minute, "bash", "-lc", command)
+}
+
+func (w *Workspace) command(parent context.Context, timeout time.Duration, name string, args ...string) (string, error) {
+	ctx, cancel := context.WithTimeout(parent, timeout); defer cancel()
 	cmd := exec.CommandContext(ctx, name, args...)
 	cmd.Dir = w.Root
 	var out bytes.Buffer
@@ -124,14 +152,22 @@ func (w *Workspace) command(timeout time.Duration, name string, args ...string) 
 }
 
 func (w *Workspace) GitStatus() (string, error) {
-	return w.command(10*time.Second, "git", "status", "--short", "--branch")
+	return w.GitStatusContext(context.Background())
+}
+
+func (w *Workspace) GitStatusContext(ctx context.Context) (string, error) {
+	return w.command(ctx, 10*time.Second, "git", "status", "--short", "--branch")
 }
 
 func (w *Workspace) GitDiff() (string, error) {
-	return w.command(20*time.Second, "git", "diff", "--no-ext-diff", "--")
+	return w.GitDiffContext(context.Background())
+}
+
+func (w *Workspace) GitDiffContext(ctx context.Context) (string, error) {
+	return w.command(ctx, 20*time.Second, "git", "diff", "--no-ext-diff", "--")
 }
 
 func (w *Workspace) GitHEAD() string {
-	out, _ := w.command(5*time.Second, "git", "rev-parse", "HEAD")
+	out, _ := w.command(context.Background(), 5*time.Second, "git", "rev-parse", "HEAD")
 	return strings.TrimSpace(out)
 }
