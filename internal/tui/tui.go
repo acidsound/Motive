@@ -42,7 +42,7 @@ func Run(rt *runtime.Runtime) error {
 }
 
 func (m model) Init() tea.Cmd {
-	return tea.Blink
+	return textarea.Blink
 }
 
 func (m model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
