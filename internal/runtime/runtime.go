@@ -14,11 +14,30 @@ import (
 
 const systemPrompt = `You are Motive, a model-centric software execution runtime. Work directly on the user's workspace instead of merely describing code. Each user request is an independent execution request: do not assume unseen chat history. Inspect the workspace when needed, use tools decisively, make concrete file changes when asked, run tests or builds when useful, and report what actually happened. Prefer the smallest relevant context and avoid reading unrelated files. You may use shell, filesystem, web search, and git tools.`
 
+type TraceEvent struct {
+	Kind                 string
+	Step                 int
+	MaxSteps             int
+	MessageCount         int
+	ToolName             string
+	ToolCalls            int
+	ToolResultBytes      int
+	RequestBytes         int
+	EstimatedInputTokens int
+	ResponseBytes        int
+	Latency              time.Duration
+	TotalElapsed         time.Duration
+	BaseRevision         string
+	ResultRevision       string
+	Error                error
+}
+
 type Runtime struct {
 	Model    *model.Client
 	WS       *workspace.Workspace
 	Exec     *tools.Executor
 	MaxSteps int
+	Trace    func(TraceEvent)
 }
 
 func New(client *model.Client) *Runtime {
@@ -34,72 +53,68 @@ func (r *Runtime) ContextBlock() string {
 	b.WriteString(systemPrompt)
 	b.WriteString("\n\nWorkspace: ")
 	b.WriteString(r.WS.Root)
-	if head := r.WS.GitHEAD(); head != "" {
-		b.WriteString("\nGit HEAD: ")
-		b.WriteString(head)
-	}
-	if status != "" {
-		b.WriteString("\nGit status:\n")
-		b.WriteString(status)
-	}
-	if len(files) > 6000 {
-		files = files[:6000] + "\n..."
-	}
-	if files != "" {
-		b.WriteString("\nWorkspace files:\n")
-		b.WriteString(files)
-	}
+	if head := r.WS.GitHEAD(); head != "" { b.WriteString("\nGit HEAD: "); b.WriteString(head) }
+	if status != "" { b.WriteString("\nGit status:\n"); b.WriteString(status) }
+	if len(files) > 6000 { files = files[:6000] + "\n..." }
+	if files != "" { b.WriteString("\nWorkspace files:\n"); b.WriteString(files) }
 	return b.String()
 }
 
-func (r *Runtime) Execute(ctx context.Context, request string) (string, error) {
-	if strings.TrimSpace(request) == "" {
-		return "", fmt.Errorf("request is empty")
+func (r *Runtime) emit(event TraceEvent) {
+	if r.Trace != nil {
+		r.Trace(event)
 	}
-	messages := []model.Message{{Role: "system", Content: r.ContextBlock()}, {Role: "user", Content: request}}
-	tools := tools.Definitions()
-	trace := []string{}
-	started := time.Now()
+}
 
-	fmt.Fprintf(os.Stderr, "[motive] execution started\n")
-	defer func() {
-		fmt.Fprintf(os.Stderr, "[motive] execution finished in %s\n", time.Since(started).Round(time.Millisecond))
-	}()
+func (r *Runtime) Execute(ctx context.Context, request string) (string, error) {
+	if strings.TrimSpace(request) == "" { return "", fmt.Errorf("request is empty") }
+	started := time.Now()
+	baseRevision := r.WS.GitHEAD()
+	messages := []model.Message{{Role: "system", Content: r.ContextBlock()}, {Role: "user", Content: request}}
+	toolDefs := tools.Definitions()
+	trace := []string{}
+
+	r.emit(TraceEvent{Kind: "start", MaxSteps: r.MaxSteps, MessageCount: len(messages), BaseRevision: baseRevision})
 
 	for step := 0; step < r.MaxSteps; step++ {
-		stepStarted := time.Now()
-		fmt.Fprintf(os.Stderr, "[motive] step %d/%d: model request (%d messages)\n", step+1, r.MaxSteps, len(messages))
-		msg, err := r.Model.Chat(ctx, messages, tools)
-		if err != nil {
-			fmt.Fprintf(os.Stderr, "[motive] step %d: model error after %s: %v\n", step+1, time.Since(stepStarted).Round(time.Millisecond), err)
+		if err := ctx.Err(); err != nil {
+			r.emit(TraceEvent{Kind: "finish", Step: step, MaxSteps: r.MaxSteps, TotalElapsed: time.Since(started), BaseRevision: baseRevision, ResultRevision: r.WS.GitHEAD(), Error: err})
 			return "", err
 		}
-		messages = append(messages, msg)
-		if msg.Content != "" {
-			trace = append(trace, msg.Content)
+
+		stepNumber := step + 1
+		r.emit(TraceEvent{Kind: "model_start", Step: stepNumber, MaxSteps: r.MaxSteps, MessageCount: len(messages), TotalElapsed: time.Since(started)})
+		msg, stats, err := r.Model.Chat(ctx, messages, toolDefs)
+		if err != nil {
+			r.emit(TraceEvent{Kind: "model_end", Step: stepNumber, MaxSteps: r.MaxSteps, MessageCount: len(messages), RequestBytes: stats.RequestBytes, EstimatedInputTokens: stats.EstimatedInputTokens, ResponseBytes: stats.ResponseBytes, Latency: stats.Latency, TotalElapsed: time.Since(started), Error: err})
+			r.emit(TraceEvent{Kind: "finish", Step: stepNumber, MaxSteps: r.MaxSteps, TotalElapsed: time.Since(started), BaseRevision: baseRevision, ResultRevision: r.WS.GitHEAD(), Error: err})
+			return "", err
 		}
+		r.emit(TraceEvent{Kind: "model_end", Step: stepNumber, MaxSteps: r.MaxSteps, MessageCount: len(messages), ToolCalls: len(msg.ToolCalls), RequestBytes: stats.RequestBytes, EstimatedInputTokens: stats.EstimatedInputTokens, ResponseBytes: stats.ResponseBytes, Latency: stats.Latency, TotalElapsed: time.Since(started)})
+		messages = append(messages, msg)
+		if msg.Content != "" { trace = append(trace, msg.Content) }
 		if len(msg.ToolCalls) == 0 {
-			fmt.Fprintf(os.Stderr, "[motive] step %d: final response after %s\n", step+1, time.Since(stepStarted).Round(time.Millisecond))
 			if msg.Content == "" {
-				return "", fmt.Errorf("model finished without a response")
+				err := fmt.Errorf("model finished without a response")
+				r.emit(TraceEvent{Kind: "finish", Step: stepNumber, MaxSteps: r.MaxSteps, TotalElapsed: time.Since(started), BaseRevision: baseRevision, ResultRevision: r.WS.GitHEAD(), Error: err})
+				return "", err
 			}
+			r.emit(TraceEvent{Kind: "finish", Step: stepNumber, MaxSteps: r.MaxSteps, TotalElapsed: time.Since(started), BaseRevision: baseRevision, ResultRevision: r.WS.GitHEAD()})
 			return strings.Join(trace, "\n\n"), nil
 		}
 
-		fmt.Fprintf(os.Stderr, "[motive] step %d: %d tool call(s) after %s\n", step+1, len(msg.ToolCalls), time.Since(stepStarted).Round(time.Millisecond))
 		for _, call := range msg.ToolCalls {
-			if call.Function.Name == "" {
-				continue
-			}
-			trace = append(trace, fmt.Sprintf("[tool] %s", call.Function.Name))
+			if call.Function.Name == "" { continue }
 			toolStarted := time.Now()
-			result, err := r.Exec.Run(call.Function.Name, call.Function.Arguments)
-			if err != nil {
-				result = "ERROR: " + err.Error()
-			}
-			fmt.Fprintf(os.Stderr, "[motive]   tool %s: %d bytes, %s\n", call.Function.Name, len(result), time.Since(toolStarted).Round(time.Millisecond))
+			result, err := r.Exec.Run(ctx, call.Function.Name, call.Function.Arguments)
+			resultBytes := len(result)
+			if err != nil { result = "ERROR: " + err.Error() }
+			r.emit(TraceEvent{Kind: "tool", Step: stepNumber, MaxSteps: r.MaxSteps, ToolName: call.Function.Name, ToolResultBytes: resultBytes, Latency: time.Since(toolStarted), TotalElapsed: time.Since(started)})
 			messages = append(messages, model.Message{Role: "tool", ToolCallID: call.ID, Content: result})
 		}
 	}
-	return "", fmt.Errorf("tool loop exceeded %d steps", r.MaxSteps)
+
+	err := fmt.Errorf("tool loop exceeded %d steps", r.MaxSteps)
+	r.emit(TraceEvent{Kind: "finish", Step: r.MaxSteps, MaxSteps: r.MaxSteps, TotalElapsed: time.Since(started), BaseRevision: baseRevision, ResultRevision: r.WS.GitHEAD(), Error: err})
+	return "", err
 }
