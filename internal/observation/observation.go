@@ -35,7 +35,9 @@ type State struct {
 	ToolFailures int
 }
 
-func New() *State { return &State{Files: map[string]File{}} }
+func New() *State {
+	return &State{Files: map[string]File{}}
+}
 
 func (s *State) ObserveRead(rawArguments, content string, step int) (File, bool) {
 	var args map[string]any
@@ -137,7 +139,9 @@ func lineCount(s string) int {
 	return 1 + strings.Count(s, "\n")
 }
 
-func countMatches(re *regexp.Regexp, s string) int { return len(re.FindAllStringSubmatch(s, -1)) }
+func countMatches(re *regexp.Regexp, s string) int {
+	return len(re.FindAllStringSubmatch(s, -1))
+}
 
 func countExportedDecls(s string) int {
 	count := 0
