@@ -218,3 +218,55 @@ func TestEscClosesHelp(t *testing.T) {
 		t.Fatal("esc should close helpOpen")
 	}
 }
+
+func TestDynamicInputHeight(t *testing.T) {
+	m := newTestModel()
+	m.width = 80
+	m.height = 30
+	if m.inputH != 1 {
+		t.Fatalf("initial inputH = %d, want 1", m.inputH)
+	}
+
+	m.input.SetValue("line 1\nline 2")
+	m.syncInputHeight()
+	if m.inputH != 2 {
+		t.Errorf("inputH for 2 lines = %d, want 2", m.inputH)
+	}
+
+	m.input.SetValue("line 1\nline 2\nline 3\nline 4\nline 5")
+	m.syncInputHeight()
+	if m.inputH != 5 {
+		t.Errorf("inputH for 5 lines = %d, want 5", m.inputH)
+	}
+}
+
+func TestDynamicInputHeightMaxClamped(t *testing.T) {
+	m := newTestModel()
+	m.width = 80
+	m.height = 30
+
+	lines15 := strings.Repeat("line\n", 14) + "last"
+	m.input.SetValue(lines15)
+	m.syncInputHeight()
+	if m.inputH != maxInputHeight {
+		t.Errorf("inputH for 15 lines = %d, want %d (maxInputHeight)", m.inputH, maxInputHeight)
+	}
+}
+
+func TestDynamicInputHeightShrinkOnSubmit(t *testing.T) {
+	m := newTestModel()
+	m.width = 80
+	m.height = 30
+
+	m.input.SetValue("line 1\nline 2\nline 3")
+	m.syncInputHeight()
+	if m.inputH != 3 {
+		t.Fatalf("inputH before submit = %d, want 3", m.inputH)
+	}
+
+	m2, _ := m.submit()
+	m = m2.(model)
+	if m.inputH != 1 {
+		t.Errorf("inputH after submit = %d, want 1", m.inputH)
+	}
+}

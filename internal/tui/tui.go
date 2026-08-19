@@ -118,9 +118,40 @@ type model struct {
 	startPicker bool
 }
 
+const maxInputHeight = 10
+
+func (m *model) syncInputHeight() {
+	lines := m.input.LineCount()
+	if lines < 1 {
+		lines = 1
+	}
+	maxH := maxInputHeight
+	if m.height > 0 {
+		statusH := lineCount(m.statusLine())
+		availForInput := m.height - statusH - 2
+		if availForInput < 1 {
+			availForInput = 1
+		}
+		if maxH > availForInput {
+			maxH = availForInput
+		}
+	}
+	h := min(lines, maxH)
+	if h < 1 {
+		h = 1
+	}
+	m.inputH = h
+	m.input.SetHeight(h)
+}
+
 func newModel(rt *runtime.Runtime, cfg *config.Config, sess *session.Store, startPicker bool) model {
 	input := textarea.New()
-	input.Prompt = ""
+	input.SetPromptFunc(2, func(p textarea.PromptInfo) string {
+		if p.LineNumber == 0 {
+			return stylePrompt.Render("> ")
+		}
+		return "  "
+	})
 	input.ShowLineNumbers = false
 	input.SetVirtualCursor(false)
 	input.SetStyles(textarea.DefaultStyles(true))
@@ -135,16 +166,18 @@ func newModel(rt *runtime.Runtime, cfg *config.Config, sess *session.Store, star
 	keys := DefaultKeymap()
 	keys.ApplyEnv()
 
-	return model{
+	m := model{
 		rt:          rt,
 		cfg:         cfg,
 		sess:        sess,
 		keys:        keys,
 		input:       input,
 		spin:        spin,
-		inputH:      3,
+		inputH:      1,
 		startPicker: startPicker,
 	}
+	m.syncInputHeight()
+	return m
 }
 
 // Run starts the terminal UI, forwarding every runtime trace event into the
@@ -192,9 +225,8 @@ func (m model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 	case tea.WindowSizeMsg:
 		m.width = msg.Width
 		m.height = msg.Height
-		m.inputH = max(3, min(8, msg.Height/4))
-		m.input.SetWidth(max(1, msg.Width-2))
-		m.input.SetHeight(m.inputH)
+		m.input.SetWidth(max(1, msg.Width))
+		m.syncInputHeight()
 		if m.overlay == overlayModelPicker || m.overlay == overlaySessionPicker {
 			m.list.SetSize(max(40, m.width-6), max(10, m.height-8))
 		}
@@ -210,6 +242,7 @@ func (m model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 	}
 	var cmd tea.Cmd
 	m.input, cmd = m.input.Update(msg)
+	m.syncInputHeight()
 	return m, cmd
 }
 
@@ -237,6 +270,7 @@ func (m model) handleKey(msg tea.KeyPressMsg) (tea.Model, tea.Cmd) {
 	case string(m.keys.Newline):
 		m.input.SetValue(m.input.Value() + "\n")
 		m.input.MoveToEnd()
+		m.syncInputHeight()
 		return m, nil
 
 	case string(m.keys.CycleEffort):
@@ -333,6 +367,7 @@ func (m model) handleKey(msg tea.KeyPressMsg) (tea.Model, tea.Cmd) {
 
 	var cmd tea.Cmd
 	m.input, cmd = m.input.Update(msg)
+	m.syncInputHeight()
 	return m, cmd
 }
 
@@ -376,20 +411,25 @@ func (m model) submit() (tea.Model, tea.Cmd) {
 		return m, nil
 	}
 	m.input.Reset()
+	m.syncInputHeight()
 	m.histIdx = len(m.history)
 	m.history = append(m.history, request)
 
-	m.baseRev = m.rt.WS.GitHEAD()
+	if m.rt != nil && m.rt.WS != nil {
+		m.baseRev = m.rt.WS.GitHEAD()
+	}
 	m.resultRev = ""
 	m.appendMessage(message{role: "user", content: request, ts: time.Now()})
 
 	m.busy = true
 	m.step = 0
-	m.maxSteps = m.rt.Budget.MaxSteps
+	if m.rt != nil {
+		m.maxSteps = m.rt.Budget.MaxSteps
+		m.rt.Stream = true
+	}
 	m.toolCalls = 0
 	m.elapsed = 0
 	m.scroll = 0
-	m.rt.Stream = true
 
 	if m.sess != nil && m.sessionID == "" {
 		if id, err := m.sess.New(); err == nil {
@@ -660,17 +700,20 @@ func (m *model) historyPrev() {
 	}
 	m.input.SetValue(m.history[m.histIdx])
 	m.input.MoveToEnd()
+	m.syncInputHeight()
 }
 
 func (m *model) historyNext() {
 	if m.histIdx >= len(m.history)-1 {
 		m.histIdx = len(m.history)
 		m.input.SetValue("")
+		m.syncInputHeight()
 		return
 	}
 	m.histIdx++
 	m.input.SetValue(m.history[m.histIdx])
 	m.input.MoveToEnd()
+	m.syncInputHeight()
 }
 
 func (m *model) togglePanel() {
@@ -891,13 +934,11 @@ func (m model) View() tea.View {
 	}
 	b.WriteString(status)
 	b.WriteString("\n")
-	b.WriteString(stylePrompt.Render("> "))
 	b.WriteString(m.input.View())
 
 	v := tea.NewView(b.String())
 	v.AltScreen = true
 	if cursor := m.input.Cursor(); cursor != nil {
-		cursor.X += 2
 		cursor.Y += len(body) + statusH
 		v.Cursor = cursor
 	}
