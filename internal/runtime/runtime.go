@@ -10,6 +10,7 @@ import (
 	"unicode/utf8"
 
 	"github.com/acidsound/Motive/internal/model"
+	"github.com/acidsound/Motive/internal/observation"
 	"github.com/acidsound/Motive/internal/tools"
 	"github.com/acidsound/Motive/internal/workspace"
 )
@@ -56,13 +57,14 @@ type Observation struct {
 }
 
 type Runtime struct {
-	Model    *model.Client
-	WS       *workspace.Workspace
-	Exec     *tools.Executor
-	MaxSteps int
-	Budget   ExecutionBudget
-	Trace    func(TraceEvent)
-	Stream   bool
+	Model       *model.Client
+	WS          *workspace.Workspace
+	Exec        *tools.Executor
+	Observ      *observation.State
+	MaxSteps    int
+	Budget      ExecutionBudget
+	Trace       func(TraceEvent)
+	Stream      bool
 }
 
 const (
@@ -84,6 +86,7 @@ func New(client *model.Client) *Runtime {
 		Model:    client,
 		WS:       ws,
 		Exec:     &tools.Executor{WS: ws},
+		Observ:   observation.New(),
 		MaxSteps: steps,
 		Budget: ExecutionBudget{
 			MaxSteps:     steps,
@@ -259,18 +262,22 @@ func (r *Runtime) Execute(ctx context.Context, request string) (string, error) {
 			obs.TotalToolCalls++
 			if strings.HasPrefix(result, "ERROR: ") {
 				obs.ToolFailures++
+				r.Observ.ObserveToolFailure()
+			}
+			if call.Function.Name == "read_file" && !strings.HasPrefix(result, "ERROR: ") {
+				path := toolArgument(call.Function.Arguments, "path")
+				r.Observ.ObserveFile(path, result, stepNumber)
+			}
+			if strings.HasPrefix(result, "ERROR: ") || call.Function.Name == "shell" {
+				r.Observ.ObserveDiagnostic(result)
 			}
 			r.emit(TraceEvent{Kind: "tool", Step: stepNumber, MaxSteps: budget.MaxSteps, ToolName: call.Function.Name, ToolCalls: 1, TotalToolCalls: obs.TotalToolCalls, ToolResultBytes: len(result), Latency: time.Since(toolStarted), TotalElapsed: time.Since(started), ReasoningEffort: effort})
 			messages = append(messages, model.Message{Role: "tool", ToolCallID: call.ID, Content: result})
 		}
 		obs.LastToolFailure = toolFailed
 
-		// Make runtime state visible to the model without requiring it to infer
-		// latency, failures, or remaining budget from tool output alone.
-		messages = append(messages, model.Message{Role: "system", Content: obs.context(stepNumber, budget, started, effort, baseRevision, r.WS.GitHEAD())})
+		messages = append(messages, model.Message{Role: "system", Content: obs.context(stepNumber, budget, started, effort, baseRevision, r.WS.GitHEAD()) + "\n\n" + r.Observ.Context()})
 
-		// Observe the completed turn and adapt the next turn. Normal execution
-		// stays cheap; recovery after a tool failure gets one xhigh turn.
 		if toolFailed {
 			effort = "xhigh"
 		} else {
@@ -281,6 +288,18 @@ func (r *Runtime) Execute(ctx context.Context, request string) (string, error) {
 	err := fmt.Errorf("execution budget exceeded: %d steps", budget.MaxSteps)
 	r.emit(TraceEvent{Kind: "finish", Step: budget.MaxSteps, MaxSteps: budget.MaxSteps, TotalToolCalls: obs.TotalToolCalls, TotalElapsed: time.Since(started), ReasoningEffort: effort, BaseRevision: baseRevision, ResultRevision: r.WS.GitHEAD(), Error: err})
 	return "", err
+}
+
+func toolArgument(raw, key string) string {
+	var args map[string]any
+	if strings.TrimSpace(raw) == "" || fmt.Sprintf("%s", raw) == "{}" {
+		return ""
+	}
+	if err := json.Unmarshal([]byte(raw), &args); err != nil {
+		return ""
+	}
+	value, _ := args[key].(string)
+	return value
 }
 
 func (o Observation) context(step int, budget ExecutionBudget, started time.Time, effort, baseRevision, resultRevision string) string {
