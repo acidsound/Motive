@@ -156,14 +156,13 @@ func NewFromEnv() *Client {
 	}
 }
 
-// normalizeEffort accepts the full standard reasoning-effort vocabulary and
-// passes recognized values straight through, letting the provider reject any
-// level it does not actually support. Only unknown or empty values fall back
-// to the Motive default of "low".
+// normalizeEffort keeps Motive's model-facing contract aligned with the
+// reasoning levels currently supported by the llama.cpp/Qwen runtime used by
+// this project. Unknown or empty values fall back to the Motive default.
 func normalizeEffort(v string) string {
 	n := strings.ToLower(strings.TrimSpace(v))
 	switch n {
-	case "low", "medium", "high", "xhigh", "max":
+	case "low", "medium", "xhigh":
 		return n
 	default:
 		return "low"
@@ -356,8 +355,6 @@ func (c *Client) consumeStream(body io.Reader, stats ChatStats, onDelta func(Str
 		}
 		trimmed := strings.TrimSpace(line)
 		if first && trimmed != "" && !strings.HasPrefix(trimmed, "data:") && strings.HasPrefix(trimmed, "{") {
-			// Non-streaming fallback: the server ignored stream=true and sent a
-			// single JSON document. Read the remainder and parse it normally.
 			rest, rerr := io.ReadAll(reader)
 			stats.ResponseBytes += len(rest)
 			payload := append([]byte(trimmed), rest...)
@@ -397,8 +394,6 @@ func (c *Client) consumeStream(body io.Reader, stats ChatStats, onDelta func(Str
 		}
 		var chunk streamChunk
 		if uerr := json.Unmarshal([]byte(payload), &chunk); uerr != nil {
-			// Skip keep-alive comments or partial lines rather than failing the
-			// whole request; a conforming server only sends valid JSON chunks.
 			continue
 		}
 		if chunk.Timings != nil {
