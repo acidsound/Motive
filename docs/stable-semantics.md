@@ -24,6 +24,8 @@ Motive deliberately does not depend on an agent framework, plugin system, planne
 
 Motive communicates with an OpenAI-compatible `/v1/chat/completions` endpoint. **[SOURCE]**
 
+The current project goal is a practical execution environment in which the model can inspect, modify, verify, and revise a software workspace while Motive provides bounded execution and observation. **[DECISION]**
+
 ## 3. Context and persistence
 
 Each user request starts with a fresh model context. Motive must not depend on unseen chat history to execute a request. **[SOURCE][DECISION]**
@@ -93,10 +95,9 @@ Motive supports named providers configured via a TOML file (default path `~/.con
 
 The active provider is selected by the `default_provider` field in the config file; if absent, the first listed provider is active. **[SOURCE]**
 
-Environment variables (`MOTIVE_BASE_URL`, `MOTIVE_MODEL`, `MOTIVE_API_KEY`, `MOTIVE_REASONING_EFFORT`) always override the active provider's file values, preserving the historical single-endpoint behavior. **[SOURCE]**
+Environment variables (`MOTIVE_BASE_URL`, `MOTIVE_MODEL`, `MOTIVE_API_KEY`, `MOTIVE_REASONING_EFFORT`) override the active provider's corresponding values, preserving the historical single-endpoint behavior. **[SOURCE]**
 
-Without a config file, environment variables form a single implicit "default" provider. **[SOURCE]**
-
+Without a config file, environment variables form a single implicit default provider. **[SOURCE]**
 
 The state directory for session storage defaults to `~/.motive` and is overridable with `MOTIVE_STATE_DIR`. **[SOURCE]**
 
@@ -112,31 +113,25 @@ Session persistence is a transcript record, not a model context. Resuming a sess
 
 ## 9. Reasoning effort
 
-Reasoning effort is a runtime model parameter. Motive accepts the full standard vocabulary — `low`, `medium`, `high`, `xhigh`, `max` — and passes the selected value through to the model server; a provider that does not support a level rejects it rather than Motive silently substituting a different level. Only unknown or empty values fall back to `low`. **[SOURCE][DECISION]**
+Reasoning effort is a runtime model parameter. Motive recognizes `low`, `medium`, `high`, `xhigh`, and `max` and passes a recognized value through to the model server rather than silently substituting another recognized level. Unknown or empty values fall back to `low`. **[SOURCE]**
 
-The supported normalized values are:
-
-```text
-low, medium, high, xhigh, max
-```
-
-**[SOURCE][DECISION]**
-
-The current default is `low`. **[SOURCE][DECISION]**
+The current Motive default is `low`. **[DECISION]**
 
 The configured effort is sent to the model request both as `reasoning_effort` and as the `reasoning_effort` chat-template argument. **[SOURCE]**
 
 During execution, the runtime may temporarily escalate to `xhigh` after a tool failure, then restore the configured default effort on a subsequent turn. **[SOURCE][DECISION]**
 
-The TUI exposes the five recognized levels and cycles them with `Ctrl+E`. **[SOURCE]**
+The TUI exposes reasoning-effort control and displays the active effort in the status area. **[SOURCE]**
 
-The precise mapping between these symbolic effort levels and model-specific compute is provider/model dependent and remains **[UNKNOWN]** at the Motive semantic layer.
+For the currently used llama-server/Qwen setup, `low`, `medium`, and `xhigh` have been exercised in the benchmark phase. Support and behavior of `high` and `max` on that provider/model combination are **[UNKNOWN]** and must not be assumed from Motive's normalized vocabulary.
+
+The precise mapping between symbolic effort levels and model-specific compute is provider/model dependent. **[SOURCE]**
 
 ## 10. Temperature
 
 Temperature is an explicit model request parameter. The configured value is serialized even when it is `0`. **[SOURCE]**
 
-The current default is `0.6`. **[SOURCE][DECISION]**
+The current default is `0.6`. **[DECISION]**
 
 The semantic meaning of a particular temperature value remains that of the underlying model server; Motive does not define model-specific decoding behavior. **[SOURCE]**
 
@@ -148,9 +143,11 @@ Runtime configuration is clamped to hard upper bounds of 256 steps, 120 minutes,
 
 Exceeding any budget terminates execution with an `execution budget exceeded` error. Duration exhaustion cancels the execution context. **[SOURCE]**
 
-The execution budget is a safety boundary on the runtime loop. It is not equivalent to a model reasoning/thinking budget. **[SOURCE][DECISION]**
+The execution budget is a safety boundary on the runtime loop. It is not equivalent to a model reasoning/thinking budget. **[DECISION]**
 
-A provider-specific per-turn reasoning budget remains outside Motive's execution budget semantics. **[SOURCE][DECISION]**
+A provider-specific per-turn reasoning budget remains outside Motive's execution budget semantics. **[DECISION]**
+
+The current execution budget is considered an operational safety boundary, not a claim that the runtime always selects an optimal budget for a task. **[DECISION]**
 
 ## 12. Failure and recovery
 
@@ -190,11 +187,11 @@ Telemetry is observational data. It does not by itself imply that Motive has lea
 
 ## 14. Self-observation
 
-Self-observation is now a defined runtime capability: after each tool-bearing turn, Motive provides the model with a bounded, structured observation containing execution budget usage, tool failures, recent model latency/prediction timing, current reasoning effort, elapsed/remaining time, and Git revisions. **[SOURCE][DECISION]**
+Self-observation is a current runtime capability: after tool-bearing turns, Motive provides the model with a bounded, structured observation containing execution budget usage, tool failures, recent model latency/prediction timing, current reasoning effort, elapsed/remaining time, and Git revisions. **[SOURCE][DECISION]**
 
 The observation is deliberately compact and does not include hidden chain-of-thought. It describes runtime state rather than exposing private reasoning content. **[DECISION]**
 
-Automatic anomaly detection or policy learning from these observations is not implemented and remains **[UNKNOWN]**.
+The current observation mechanism is telemetry exposure, not autonomous anomaly detection. Reliable anomaly detection, scoring, and policy learning from these observations are **[UNKNOWN]**.
 
 ## 15. Self-modification
 
@@ -203,6 +200,8 @@ Motive can expose file-writing, deletion, shell, and Git operations to the model
 For workspace modification, the runtime instructs the model to verify resulting state before claiming success and not to claim commits, pushes, tests, or builds without confirming tool output. **[SOURCE][DECISION]**
 
 Motive does not automatically commit or push model changes. The model must invoke the corresponding Git operations when explicitly asked and when the available tools permit them. **[SOURCE]**
+
+This is model-directed self-modification of the workspace, not yet autonomous modification of Motive's own execution policy. **[DECISION]**
 
 Rollback, approval workflows, and automatic self-rewrite policies are **[UNKNOWN]** and are intentionally not part of the current self-modification contract.
 
@@ -216,22 +215,29 @@ The project has reached a verified baseline suitable for continuing implementati
 - `git diff --check` passes. **[TEST]**
 - A GitHub Actions run subsequently passed after the formatting correction. **[OBSERVED]**
 - A real Motive execution using `MOTIVE_TEMPERATURE=0.6` and `MOTIVE_REASONING_EFFORT=low` successfully completed a code-review-and-fix task, including verification and Git commit/push when explicitly requested. **[OBSERVED]**
+- The same real execution reached completion within the 32-step execution boundary and demonstrated that the current TUI/runtime/tool loop is usable for substantive repository work. **[OBSERVED]**
 
-The llama-server benchmark phase is considered complete. Tests across `low`, `medium`, and `xhigh` at the tested context sizes established that reasoning effort affects latency, but did not reproduce the 60–80 second Motive stalls as a simple tool-calling multiplier. **[OBSERVED]**
+The standalone llama-server benchmark phase is considered complete. **[DECISION]**
 
-The benchmark is therefore retained as diagnostic tooling, not as the next development focus. Further investigation of long executions should use Motive's own execution telemetry and request semantics rather than expanding the standalone benchmark matrix. **[DECISION]**
+The benchmark exercised `low`, `medium`, and `xhigh` across the tested context sizes. It established that reasoning effort materially changes latency and output behavior, but did not establish a single provider-side layer as the root cause of the long Motive executions. **[OBSERVED]**
 
-The observed long Motive turns with thousands of predicted reasoning tokens establish a concrete investigation target, but do not by themselves establish the root cause. The root cause remains **[UNKNOWN]** until reproduced and localized with Motive telemetry.
+The benchmark is retained as diagnostic tooling rather than as an active optimization track. Further investigation of unusually long executions should use Motive's own execution telemetry and request semantics rather than expanding the standalone benchmark matrix. **[DECISION]**
+
+The observed long Motive turns with thousands of predicted reasoning tokens establish a concrete investigation target, but do not establish the root cause. The root cause remains **[UNKNOWN]**.
 
 ## 17. Terminal UI
 
-The TUI is a first-class interface for interactive execution. It streams model output live, renders lightweight markdown (headings, code blocks, lists, bold, inline code, blockquotes, horizontal rules), and displays reasoning in a dimmed style. **[SOURCE]**
+The TUI is a first-class interface for interactive execution and has been exercised during real project work. **[OBSERVED]**
 
-The TUI supports scrollback, prompt history navigation, transcript bookmarks, tool-call collapsing, and a git diff overlay. **[SOURCE]**
+It streams model output live, renders lightweight markdown (headings, code blocks, lists, bold, inline code, blockquotes, horizontal rules), and displays reasoning separately. **[SOURCE]**
 
-All key bindings are rebindable via `MOTIVE_KEY_<NAME>` environment variables. Defaults follow a jcode-inspired layout. **[SOURCE]**
+The TUI supports scrollback, prompt history navigation, transcript bookmarks, tool-call collapsing, session selection/resume, and a git diff overlay. **[SOURCE]**
 
-The TUI status bar displays the active model, reasoning effort, step/tool/elapsed counters, execution budget, Git revision range, and session ID. **[SOURCE]**
+Key bindings are rebindable via `MOTIVE_KEY_<NAME>` environment variables. **[SOURCE]**
+
+The TUI status area displays the active model, reasoning effort, execution step/tool/elapsed counters, execution budget, Git revision range, and session ID. **[SOURCE]**
+
+Reasoning effort can be changed interactively rather than being restricted to an environment-variable-only setting. **[SOURCE]**
 
 ## 18. Stable invariants
 
@@ -241,14 +247,15 @@ The TUI status bar displays the active model, reasoning effort, step/tool/elapse
 4. **Concrete tool loop:** tool calls and their results form the iterative execution mechanism. **[SOURCE]**
 5. **Bounded execution:** an execution cannot exceed its configured step, duration, or tool-call budget. **[SOURCE]**
 6. **Observable revision state:** execution records its base and resulting Git revisions. **[SOURCE]**
-7. **Explicit reasoning configuration:** reasoning effort is a runtime parameter with `low` as the current default and `low/medium/high/xhigh/max` as the recognized normalized levels, passed through to the provider. **[SOURCE][DECISION]**
-8. **Recovery escalation is temporary:** failure-driven `xhigh` escalation does not replace the configured default effort. **[SOURCE]**
-9. **Telemetry is observational:** execution telemetry describes what happened and is not itself evidence that autonomous adaptation is implemented. **[DECISION]**
-10. **Runtime self-observation is bounded:** model-visible observations contain execution metadata, not hidden reasoning content. **[DECISION]**
-11. **Self-modification is model-directed:** workspace changes occur through the existing tools and are not silently committed or pushed by the runtime. **[SOURCE][DECISION]**
-12. **Session persistence is transcript-only:** JSONL session files record what happened but do not restore model context; each execution still starts fresh. **[SOURCE][DECISION]**
-13. **Provider switching is config-file only:** endpoint/model changes happen only via the config file; the runtime never switches providers autonomously. **[DECISION]**
+7. **Explicit reasoning configuration:** reasoning effort is a runtime parameter with `low` as the current default and a normalized Motive vocabulary of `low/medium/high/xhigh/max`, passed through to the provider. **[SOURCE][DECISION]**
+8. **Provider capability is separate:** Motive's normalized effort vocabulary does not imply that every provider/model supports every level. **[DECISION]**
+9. **Recovery escalation is temporary:** failure-driven `xhigh` escalation does not replace the configured default effort. **[SOURCE]**
+10. **Telemetry is observational:** execution telemetry describes what happened and is not itself evidence that autonomous adaptation is implemented. **[DECISION]**
+11. **Runtime self-observation is bounded:** model-visible observations contain execution metadata, not hidden reasoning content. **[DECISION]**
+12. **Self-modification is model-directed:** workspace changes occur through the existing tools and are not silently committed or pushed by the runtime. **[SOURCE][DECISION]**
+13. **Session persistence is transcript-only:** JSONL session files record what happened but do not restore model context; each execution still starts fresh. **[SOURCE][DECISION]**
 14. **Validated baseline:** formatting, tests, vetting, and diff checks are expected to remain green before advancing to the next semantic layer. **[TEST][DECISION]**
+15. **TUI is an operational interface:** TUI behavior is part of the practical user-facing runtime, not merely a demonstration layer. **[OBSERVED][DECISION]**
 
 ## 19. Explicitly unresolved semantics
 
@@ -263,19 +270,21 @@ These areas must remain marked unresolved until verified by source, tests, or ex
 - cross-session/project memory beyond the repository state (session persistence is a transcript record, not learned memory)
 - root cause of unusually long reasoning generations in real Motive executions
 - whether the current self-observation data is sufficient for reliable anomaly detection
+- whether `high` and `max` are useful/supported on the currently deployed llama-server/Qwen configuration
 
-## 20. Next semantic frontier
+## 20. Current semantic frontier
+
+The project is no longer in the phase of establishing basic reasoning control, execution budgets, TUI control, or first-order self-observation. Those capabilities now form the working baseline.
 
 The next work should proceed in this order:
 
-1. **Execution budget semantics:** make the distinction between runtime loop budget and per-turn model reasoning budget explicit and observable.
-2. **Reasoning telemetry:** expose enough bounded telemetry to identify abnormal reasoning generation without exposing hidden chain-of-thought.
-3. **TUI reasoning control:** retain `low` as the default and allow deliberate user changes among `low`, `medium`, `high`, `xhigh`, and `max`.
-4. **Recovery policy:** verify and constrain failure-driven escalation and restoration behavior.
-5. **Self-observation:** use the bounded runtime observations to detect execution anomalies before introducing autonomous policy changes.
-6. **Self-modification:** only after observation semantics are stable, evaluate model-directed modification policies and safeguards.
+1. **Self-observation quality:** verify that the bounded telemetry exposed to the model is sufficient to recognize useful execution states and failures.
+2. **Anomaly detection:** define observable criteria for pathological executions such as excessive reasoning generation, repeated failed actions, budget pressure, or ineffective tool loops without exposing hidden chain-of-thought.
+3. **Recovery policy:** use those observations to make failure recovery explicit, bounded, and testable rather than relying only on the current one-turn `xhigh` escalation.
+4. **Self-modification boundary:** determine which classes of Motive/workspace changes the model may safely perform autonomously and which require explicit user direction or verification.
+5. **Policy self-modification:** only after observation and recovery semantics are stable, evaluate whether Motive should allow the model to propose or modify execution policy itself, with rollback and verification boundaries.
 
-This ordering is a project decision, not a claim that later capabilities are already implemented. **[DECISION]**
+Standalone benchmark expansion is not part of the current frontier unless a new concrete hypothesis requires it. **[DECISION]**
 
 ## 21. Context reconstruction rule
 
