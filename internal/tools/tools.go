@@ -2,9 +2,13 @@ package tools
 
 import (
 	"context"
+	"crypto/sha256"
+	"encoding/hex"
 	"encoding/json"
 	"fmt"
+	"regexp"
 	"strings"
+	"sync"
 	"unicode/utf8"
 
 	"github.com/acidsound/Motive/internal/model"
@@ -14,7 +18,14 @@ import (
 
 const MaxToolResultBytes = 64 << 10
 
-type Executor struct{ WS *workspace.Workspace }
+var diagnosticPattern = regexp.MustCompile(`(?m)([^\s:][^\n:]*):(\d+):(\d+):\s*(.+)$`)
+
+type Executor struct {
+	WS *workspace.Workspace
+
+	mu         sync.Mutex
+	observed   map[string]string
+}
 
 func Definitions() []model.Tool {
 	obj := func(props map[string]model.ToolProperty, required ...string) model.Parameters {
@@ -36,8 +47,6 @@ func Definitions() []model.Tool {
 func (e *Executor) Run(ctx context.Context, name, raw string) (string, error) {
 	var args map[string]any
 	if strings.TrimSpace(raw) == "" {
-		// Some model servers send an empty string instead of "{}" for tools
-		// with no parameters; treat that as an empty object, not a protocol error.
 		args = map[string]any{}
 	} else if err := json.Unmarshal([]byte(raw), &args); err != nil {
 		return "", fmt.Errorf("invalid %s arguments: %w", name, err)
@@ -50,7 +59,7 @@ func (e *Executor) Run(ctx context.Context, name, raw string) (string, error) {
 	)
 	switch name {
 	case "read_file":
-		result, err = e.WS.ReadContext(ctx, str("path"))
+		result, err = e.readFile(ctx, str("path"))
 	case "write_file":
 		if err = e.WS.WriteContext(ctx, str("path"), str("content")); err == nil {
 			result = "written " + str("path")
@@ -75,9 +84,69 @@ func (e *Executor) Run(ctx context.Context, name, raw string) (string, error) {
 		return "", fmt.Errorf("unknown tool %q", name)
 	}
 	if err != nil {
-		return result, err
+		result = "ERROR: " + err.Error()
+	}
+	result = addDiagnostics(result)
+	if err != nil {
+		return Truncate(result), err
 	}
 	return Truncate(result), nil
+}
+
+func (e *Executor) readFile(ctx context.Context, path string) (string, error) {
+	content, err := e.WS.ReadContext(ctx, path)
+	if err != nil {
+		return "", err
+	}
+	hash := sha256.Sum256([]byte(content))
+	digest := hex.EncodeToString(hash[:])
+	lines := 0
+	if content != "" {
+		lines = strings.Count(content, "\n")
+		if !strings.HasSuffix(content, "\n") {
+			lines++
+		}
+	}
+
+	e.mu.Lock()
+	if e.observed == nil {
+		e.observed = make(map[string]string)
+	}
+	previous, seen := e.observed[path]
+	e.observed[path] = digest
+	e.mu.Unlock()
+
+	status := "first_read"
+	if seen && previous == digest {
+		status = "unchanged"
+	} else if seen {
+		status = "changed"
+	}
+	return fmt.Sprintf("[observation]\npath=%s\nbytes=%d\nlines=%d\nsha256=%s\nstatus=%s\n\n%s", path, len(content), lines, digest, status, content), nil
+}
+
+func addDiagnostics(result string) string {
+	matches := diagnosticPattern.FindAllStringSubmatch(result, -1)
+	if len(matches) == 0 {
+		return result
+	}
+	var b strings.Builder
+	b.WriteString(result)
+	b.WriteString("\n\n[diagnostics]")
+	for _, match := range matches {
+		if len(match) != 5 {
+			continue
+		}
+		b.WriteString("\nfile=")
+		b.WriteString(strings.TrimSpace(match[1]))
+		b.WriteString(" line=")
+		b.WriteString(match[2])
+		b.WriteString(" column=")
+		b.WriteString(match[3])
+		b.WriteString(" message=")
+		b.WriteString(strings.TrimSpace(match[4]))
+	}
+	return b.String()
 }
 
 // Truncate bounds s to MaxToolResultBytes without splitting a UTF-8 rune.
