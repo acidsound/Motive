@@ -315,3 +315,11 @@ The project's recent development experience reinforces a distinction that should
 Motive already implements its core operating model in code: model-directed reasoning, concrete tools, bounded execution, runtime observation, Git-aware state, and an operational TUI. The immediate objective is therefore to deepen the reliability and semantic clarity of that loop rather than to maximize autonomous self-rewriting. **[SOURCE][DECISION]**
 
 The stable-semantics document is part of the same experiment: Motive should be understandable and reproducible from durable project state rather than from accumulated conversational context. **[DECISION]**
+
+## 23. Context accounting (phase 1 of context budget & lifecycle)
+
+The runtime measures model-context growth during an execution. Before each model request it records an estimated input-token count for the message list, using the same bytes/4 heuristic the model client applies to the serialized request body. Tool definitions are constant overhead and are not counted as accumulated context. The peak estimate across the execution is tracked, and when the model server supplies `prompt_n` in its timings, that server-reported value is recorded separately rather than assumed. **[SOURCE][TEST]**
+
+An optional `MOTIVE_MAX_CONTEXT_TOKENS` setting (hard cap 1,000,000) defines a context limit; the default is 0, meaning accounting only. Motive does not assume a server context limit (e.g. llama-server `n_ctx`); a limit exists only when the operator configures one. **[SOURCE][DECISION]**
+
+When the estimate exceeds the configured limit, the overflow is reported in trace events (`ContextTokens`, `PeakContextTokens`, `MaxContextTokens`, `ServerPromptN`) and in the runtime observation (`ContextOverflow`). The execution is not terminated and no context is trimmed; context lifecycle actions (trimming, compaction, or termination on overflow) are not yet implemented and remain a later phase. **[SOURCE][TEST][DECISION]**
