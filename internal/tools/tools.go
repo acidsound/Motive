@@ -23,8 +23,8 @@ var diagnosticPattern = regexp.MustCompile(`(?m)([^\s:][^\n:]*):(\d+):(\d+):\s*(
 type Executor struct {
 	WS *workspace.Workspace
 
-	mu         sync.Mutex
-	observed   map[string]string
+	mu       sync.Mutex
+	observed map[string]string
 }
 
 func Definitions() []model.Tool {
