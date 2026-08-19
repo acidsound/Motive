@@ -78,6 +78,7 @@ enter          run            ctrl+e         cycle reasoning effort
 shift+enter    newline        ctrl+tab       cycle provider
 ctrl+m         model picker   ctrl+r         session picker
 ctrl+d         git diff view  ctrl+s         side panel (files/git/todo)
+ctrl+t         toggle tools   ctrl+/         toggle help
 ctrl+k / ctrl+j     scroll up / down
 alt+u / alt+d       page up / down
 up / down           prompt history (empty input)

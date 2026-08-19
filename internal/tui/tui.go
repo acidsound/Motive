@@ -64,7 +64,6 @@ const (
 	overlayModelPicker
 	overlaySessionPicker
 	overlayDiff
-	overlayHelp
 )
 
 type message struct {
@@ -111,6 +110,8 @@ type model struct {
 	panelOpen   bool
 	panelLines  []string
 	panelScroll int
+
+	helpOpen bool
 
 	toolsCollapsed bool
 
@@ -221,6 +222,10 @@ func (m model) handleKey(msg tea.KeyPressMsg) (tea.Model, tea.Cmd) {
 		if m.busy {
 			return m, nil
 		}
+		if m.helpOpen {
+			m.helpOpen = false
+			return m, nil
+		}
 		return m, tea.Quit
 
 	case string(m.keys.Run):
@@ -275,7 +280,7 @@ func (m model) handleKey(msg tea.KeyPressMsg) (tea.Model, tea.Cmd) {
 		return m, nil
 
 	case string(m.keys.Help):
-		m.overlay = overlayHelp
+		m.toggleHelp()
 		return m, nil
 
 	case string(m.keys.ScrollUp):
@@ -356,12 +361,6 @@ func (m model) handleOverlayKey(msg tea.KeyPressMsg) (tea.Model, tea.Cmd) {
 			m.diffScroll = max(0, m.diffScroll-m.height/2)
 		case string(m.keys.PageDown):
 			m.diffScroll += m.height / 2
-		}
-		return m, nil
-
-	case overlayHelp:
-		if key == string(m.keys.Help) {
-			m.overlay = overlayNone
 		}
 		return m, nil
 	}
@@ -686,6 +685,10 @@ func (m *model) toggleTools() {
 	m.toolsCollapsed = !m.toolsCollapsed
 }
 
+func (m *model) toggleHelp() {
+	m.helpOpen = !m.helpOpen
+}
+
 func (m *model) refreshPanel() {
 	files, _ := m.rt.WS.List(".")
 	status, _ := m.rt.WS.GitStatus()
@@ -801,12 +804,16 @@ func (m model) statusLine() string {
 	} else {
 		b.WriteString(styleIdle.Render("●") + " ")
 	}
-	b.WriteString(m.rt.Model.Model)
-	b.WriteString(" · " + styleEffort.Render("effort "+m.rt.Model.GetReasoningEffort()))
+	if m.rt != nil && m.rt.Model != nil {
+		b.WriteString(m.rt.Model.Model)
+		b.WriteString(" · " + styleEffort.Render("effort "+m.rt.Model.GetReasoningEffort()))
+	}
 	if m.busy {
 		b.WriteString(fmt.Sprintf(" · step %d/%d · tools %d · %s", m.step, m.maxSteps, m.toolCalls, m.elapsed.Round(time.Second)))
 	}
-	b.WriteString(fmt.Sprintf(" · budget %d steps / %d tools / %s", m.rt.Budget.MaxSteps, m.rt.Budget.MaxToolCalls, m.rt.Budget.MaxDuration.Round(time.Minute)))
+	if m.rt != nil {
+		b.WriteString(fmt.Sprintf(" · budget %d steps / %d tools / %s", m.rt.Budget.MaxSteps, m.rt.Budget.MaxToolCalls, m.rt.Budget.MaxDuration.Round(time.Minute)))
+	}
 	if rev := m.revisionLabel(); rev != "" {
 		b.WriteString(" · " + rev)
 	}
@@ -815,6 +822,9 @@ func (m model) statusLine() string {
 	}
 	if m.panelOpen {
 		b.WriteString(" · panel")
+	}
+	if m.helpOpen {
+		b.WriteString(" · help")
 	}
 	if m.toolsCollapsed {
 		b.WriteString(" · tools⏷")
@@ -839,9 +849,6 @@ func (m model) View() tea.View {
 	if m.overlay == overlayDiff {
 		return m.diffView(width, height)
 	}
-	if m.overlay == overlayHelp {
-		return m.helpView(width, height)
-	}
 	if m.overlay == overlayModelPicker || m.overlay == overlaySessionPicker {
 		return m.pickerView(width, height)
 	}
@@ -849,8 +856,14 @@ func (m model) View() tea.View {
 	status := m.statusLine()
 	statusH := lineCount(status)
 	panelW := 0
-	if m.panelOpen {
+	if m.panelOpen || m.helpOpen {
 		panelW = min(36, width/3)
+		if panelW < 24 {
+			panelW = 24
+		}
+		if width-panelW-1 < 20 {
+			panelW = max(0, width-21)
+		}
 	}
 	bodyW := width - panelW - 1
 	if bodyW < 20 {
@@ -860,10 +873,10 @@ func (m model) View() tea.View {
 	transcript := m.renderTranscript(bodyW, avail)
 
 	var body []string
-	if m.panelOpen {
-		panelH := max(0, len(transcript))
-		panel := panelWindow(m.panelLines, m.panelScroll, panelH)
-		body = zipColumns(transcript, panel, bodyW, panelW)
+	if panelW > 0 {
+		panelH := max(avail, len(transcript))
+		rightLines := m.renderRightColumn(panelH)
+		body = zipColumns(transcript, rightLines, bodyW, panelW)
 	} else {
 		body = transcript
 	}
@@ -922,27 +935,25 @@ func (m model) diffView(width, height int) tea.View {
 	return v
 }
 
-func (m model) helpView(width, height int) tea.View {
-	lines := buildHelpLines(m.keys)
-	// Reserve 1 line for the footer hint.
-	avail := max(1, height-2)
-	if len(lines) > avail {
-		lines = lines[:avail]
+func (m model) renderRightColumn(panelH int) []string {
+	var lines []string
+	if m.helpOpen {
+		lines = append(lines, buildHelpLines(m.keys)...)
 	}
-	var b strings.Builder
-	b.WriteString(stylePanelHeading.Render("Keybindings"))
-	b.WriteString("\n")
-	for _, l := range lines {
-		b.WriteString(l)
-		b.WriteString("\n")
+	if m.panelOpen {
+		if len(lines) > 0 {
+			lines = append(lines, "")
+		}
+		lines = append(lines, m.panelLines...)
 	}
-	b.WriteString(styleDim.Render("  esc / ctrl+c close"))
-	v := tea.NewView(b.String())
-	v.AltScreen = true
-	return v
+	scroll := 0
+	if !m.helpOpen {
+		scroll = m.panelScroll
+	}
+	return panelWindow(lines, scroll, panelH)
 }
 
-// buildHelpLines returns styled rows for the help overlay.
+// buildHelpLines returns styled rows for the help box.
 func buildHelpLines(k Keymap) []string {
 	type row struct {
 		keys string
@@ -951,21 +962,21 @@ func buildHelpLines(k Keymap) []string {
 	rows := []row{
 		{string(k.Run), "Send message"},
 		{string(k.Newline), "Insert newline"},
-		{string(k.CycleEffort), "Cycle reasoning effort"},
+		{string(k.CycleEffort), "Cycle effort"},
 		{string(k.CycleModel), "Cycle provider"},
 		{string(k.ModelPicker), "Model picker"},
 		{string(k.SessionPicker), "Session picker"},
 		{string(k.DiffToggle), "Git diff"},
 		{string(k.PanelToggle), "Toggle panel"},
-		{string(k.ToolsToggle), "Toggle tool output"},
-		{string(k.Help), "Show keybindings (this)"},
+		{string(k.ToolsToggle), "Toggle tools"},
+		{string(k.Help), "Toggle help (this)"},
 		{string(k.ScrollUp), "Scroll up"},
 		{string(k.ScrollDown), "Scroll down"},
 		{string(k.PageUp), "Page up"},
 		{string(k.PageDown), "Page down"},
 		{string(k.HistoryUp), "History up"},
 		{string(k.HistoryDown), "History down"},
-		{string(k.Bookmark), "Bookmark last message"},
+		{string(k.Bookmark), "Bookmark message"},
 		{string(k.Clear), "Clear transcript"},
 		{string(k.Quit), "Quit"},
 	}
@@ -977,7 +988,7 @@ func buildHelpLines(k Keymap) []string {
 	}
 	keyStyle := lipgloss.NewStyle().Foreground(lipgloss.Color(colorPrompt)).Width(keyW)
 	descStyle := lipgloss.NewStyle().Foreground(lipgloss.Color(colorAssistant))
-	var out []string
+	out := []string{stylePanelHeading.Render("Keybindings")}
 	for _, r := range rows {
 		out = append(out, "  "+keyStyle.Render(r.keys)+"  "+descStyle.Render(r.desc))
 	}

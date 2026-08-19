@@ -4,6 +4,7 @@ import (
 	"strings"
 	"testing"
 
+	tea "charm.land/bubbletea/v2"
 	"github.com/acidsound/Motive/internal/config"
 	llm "github.com/acidsound/Motive/internal/model"
 	"github.com/acidsound/Motive/internal/runtime"
@@ -11,7 +12,7 @@ import (
 )
 
 func newTestModel() model {
-	return newModel(&runtime.Runtime{}, &config.Config{}, nil, false)
+	return newModel(&runtime.Runtime{Model: &llm.Client{Model: "test-model"}}, &config.Config{}, nil, false)
 }
 
 func TestLoadSessionRestoresMessages(t *testing.T) {
@@ -169,5 +170,51 @@ func TestToggleTools(t *testing.T) {
 	m.toggleTools()
 	if m.toolsCollapsed {
 		t.Fatal("after second toggle should be expanded")
+	}
+}
+
+func TestToggleHelp(t *testing.T) {
+	m := newTestModel()
+	if m.helpOpen {
+		t.Fatal("initial state should be closed")
+	}
+	m.toggleHelp()
+	if !m.helpOpen {
+		t.Fatal("after toggle should be open")
+	}
+	m.toggleHelp()
+	if m.helpOpen {
+		t.Fatal("after second toggle should be closed")
+	}
+}
+
+func TestHelpInRightColumnView(t *testing.T) {
+	m := newTestModel()
+	m.width = 80
+	m.height = 24
+	m.helpOpen = true
+
+	view := m.View()
+	if !strings.Contains(view.Content, "Keybindings") {
+		t.Errorf("expected view to contain Keybindings heading, got:\n%s", view.Content)
+	}
+	if !strings.Contains(view.Content, "ctrl+/") {
+		t.Errorf("expected view to contain help key ctrl+/, got:\n%s", view.Content)
+	}
+	if !strings.Contains(m.statusLine(), "help") {
+		t.Errorf("status line should show help indicator: %s", m.statusLine())
+	}
+}
+
+func TestEscClosesHelp(t *testing.T) {
+	m := newTestModel()
+	m.helpOpen = true
+	m2, cmd := m.handleKey(tea.KeyPressMsg{Code: tea.KeyEsc})
+	if cmd != nil {
+		t.Fatalf("expected no quit cmd when closing help, got: %v", cmd)
+	}
+	m = m2.(model)
+	if m.helpOpen {
+		t.Fatal("esc should close helpOpen")
 	}
 }
