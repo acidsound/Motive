@@ -97,7 +97,6 @@ Environment variables (`MOTIVE_BASE_URL`, `MOTIVE_MODEL`, `MOTIVE_API_KEY`, `MOT
 
 Without a config file, environment variables form a single implicit "default" provider. **[SOURCE]**
 
-The TUI allows the user to cycle providers (`Ctrl+Tab`) or select a specific provider/model combination via a picker (`Ctrl+M`). Switching providers changes the endpoint, model, and reasoning effort for subsequent turns. **[SOURCE]**
 
 The state directory for session storage defaults to `~/.motive` and is overridable with `MOTIVE_STATE_DIR`. **[SOURCE]**
 
@@ -228,11 +227,11 @@ The observed long Motive turns with thousands of predicted reasoning tokens esta
 
 The TUI is a first-class interface for interactive execution. It streams model output live, renders lightweight markdown (headings, code blocks, lists, bold, inline code, blockquotes, horizontal rules), and displays reasoning in a dimmed style. **[SOURCE]**
 
-The TUI supports scrollback, prompt history navigation, transcript bookmarks, tool-call collapsing, a git diff overlay, and a side panel showing workspace files, git status, and TODO items. **[SOURCE]**
+The TUI supports scrollback, prompt history navigation, transcript bookmarks, tool-call collapsing, and a git diff overlay. **[SOURCE]**
 
 All key bindings are rebindable via `MOTIVE_KEY_<NAME>` environment variables. Defaults follow a jcode-inspired layout. **[SOURCE]**
 
-The TUI status bar displays the active model, reasoning effort, step/tool/elapsed counters, execution budget, Git revision range, session ID, and panel state. **[SOURCE]**
+The TUI status bar displays the active model, reasoning effort, step/tool/elapsed counters, execution budget, Git revision range, and session ID. **[SOURCE]**
 
 ## 18. Stable invariants
 
@@ -248,7 +247,7 @@ The TUI status bar displays the active model, reasoning effort, step/tool/elapse
 10. **Runtime self-observation is bounded:** model-visible observations contain execution metadata, not hidden reasoning content. **[DECISION]**
 11. **Self-modification is model-directed:** workspace changes occur through the existing tools and are not silently committed or pushed by the runtime. **[SOURCE][DECISION]**
 12. **Session persistence is transcript-only:** JSONL session files record what happened but do not restore model context; each execution still starts fresh. **[SOURCE][DECISION]**
-13. **Provider switching is user-directed:** endpoint/model changes happen only via explicit user action in the TUI or config file; the runtime never switches providers autonomously. **[SOURCE][DECISION]**
+13. **Provider switching is config-file only:** endpoint/model changes happen only via the config file; the runtime never switches providers autonomously. **[DECISION]**
 14. **Validated baseline:** formatting, tests, vetting, and diff checks are expected to remain green before advancing to the next semantic layer. **[TEST][DECISION]**
 
 ## 19. Explicitly unresolved semantics

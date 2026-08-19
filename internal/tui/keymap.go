@@ -17,11 +17,8 @@ type Keymap struct {
 	Run             Binding
 	Newline         Binding
 	CycleEffort     Binding
-	CycleModel      Binding
-	ModelPicker     Binding
 	SessionPicker   Binding
 	DiffToggle      Binding
-	PanelToggle     Binding
 	ToolsToggle     Binding
 	ReasoningToggle Binding
 	ScrollUp        Binding
@@ -41,11 +38,8 @@ func DefaultKeymap() Keymap {
 		Run:             "enter",
 		Newline:         "shift+enter",
 		CycleEffort:     "ctrl+e",
-		CycleModel:      "ctrl+tab",
-		ModelPicker:     "ctrl+m",
 		SessionPicker:   "ctrl+r",
 		DiffToggle:      "ctrl+d",
-		PanelToggle:     "ctrl+s",
 		ToolsToggle:     "ctrl+t",
 		ReasoningToggle: "ctrl+o",
 		ScrollUp:        "ctrl+k",
@@ -66,11 +60,8 @@ func (k *Keymap) ApplyEnv() {
 	k.Run = envBinding("MOTIVE_KEY_RUN", k.Run)
 	k.Newline = envBinding("MOTIVE_KEY_NEWLINE", k.Newline)
 	k.CycleEffort = envBinding("MOTIVE_KEY_CYCLE_EFFORT", k.CycleEffort)
-	k.CycleModel = envBinding("MOTIVE_KEY_CYCLE_MODEL", k.CycleModel)
-	k.ModelPicker = envBinding("MOTIVE_KEY_MODEL_PICKER", k.ModelPicker)
 	k.SessionPicker = envBinding("MOTIVE_KEY_SESSION_PICKER", k.SessionPicker)
 	k.DiffToggle = envBinding("MOTIVE_KEY_DIFF_TOGGLE", k.DiffToggle)
-	k.PanelToggle = envBinding("MOTIVE_KEY_PANEL_TOGGLE", k.PanelToggle)
 	k.ToolsToggle = envBinding("MOTIVE_KEY_TOOLS_TOGGLE", k.ToolsToggle)
 	k.ReasoningToggle = envBinding("MOTIVE_KEY_REASONING_TOGGLE", k.ReasoningToggle)
 	k.ScrollUp = envBinding("MOTIVE_KEY_SCROLL_UP", k.ScrollUp)

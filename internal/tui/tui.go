@@ -63,7 +63,6 @@ type overlayKind int
 
 const (
 	overlayNone overlayKind = iota
-	overlayModelPicker
 	overlaySessionPicker
 	overlayDiff
 )
@@ -115,10 +114,6 @@ type model struct {
 	list       list.Model
 	diffLines  []string
 	diffScroll int
-
-	panelOpen   bool
-	panelLines  []string
-	panelScroll int
 
 	helpOpen bool
 
@@ -251,7 +246,7 @@ func (m *model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		m.height = msg.Height
 		m.input.SetWidth(max(1, msg.Width))
 		m.syncInputHeight()
-		if m.overlay == overlayModelPicker || m.overlay == overlaySessionPicker {
+		if m.overlay == overlaySessionPicker {
 			m.list.SetSize(max(40, m.width-6), max(10, m.height-8))
 		}
 
@@ -259,7 +254,7 @@ func (m *model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		return m.handleKey(msg)
 	}
 
-	if m.overlay == overlayModelPicker || m.overlay == overlaySessionPicker {
+	if m.overlay == overlaySessionPicker {
 		var cmd tea.Cmd
 		m.list, cmd = m.list.Update(msg)
 		return m, cmd
@@ -303,20 +298,6 @@ func (m *model) handleKey(msg tea.KeyPressMsg) (tea.Model, tea.Cmd) {
 		m.cycleEffort()
 		return m, nil
 
-	case string(m.keys.CycleModel):
-		if m.busy {
-			return m, nil
-		}
-		m.cycleProvider()
-		return m, nil
-
-	case string(m.keys.ModelPicker):
-		if m.busy {
-			return m, nil
-		}
-		m.openPicker(overlayModelPicker)
-		return m, nil
-
 	case string(m.keys.SessionPicker):
 		if m.busy {
 			return m, nil
@@ -326,10 +307,6 @@ func (m *model) handleKey(msg tea.KeyPressMsg) (tea.Model, tea.Cmd) {
 
 	case string(m.keys.DiffToggle):
 		m.openDiff()
-		return m, nil
-
-	case string(m.keys.PanelToggle):
-		m.togglePanel()
 		return m, nil
 
 	case string(m.keys.ToolsToggle):
@@ -401,7 +378,7 @@ func (m *model) handleOverlayKey(msg tea.KeyPressMsg) (tea.Model, tea.Cmd) {
 		return m, nil
 	}
 	switch m.overlay {
-	case overlayModelPicker, overlaySessionPicker:
+	case overlaySessionPicker:
 		if key == string(m.keys.Run) {
 			return m.applyPickerSelection()
 		}
@@ -595,48 +572,10 @@ func (m *model) cycleEffort() {
 	m.rt.Model.SetReasoningEffort(next)
 }
 
-func (m *model) cycleProvider() {
-	providers := m.cfg.Providers
-	if len(providers) == 0 {
-		return
-	}
-	name := m.activeProviderName()
-	idx := 0
-	for i := range providers {
-		if providers[i].Name == name {
-			idx = i
-			break
-		}
-	}
-	next := providers[(idx+1)%len(providers)]
-	m.applyProvider(&next, next.Model)
-}
-
-func (m *model) applyProvider(p *config.Provider, model string) {
-	m.rt.Model.SetEndpoint(p.BaseURL, model, p.APIKey)
-	m.rt.Model.SetReasoningEffort(p.ReasoningEffort)
-}
-
-func (m *model) activeProviderName() string {
-	base := strings.TrimRight(m.rt.Model.BaseURL, "/")
-	for i := range m.cfg.Providers {
-		if strings.TrimRight(m.cfg.Providers[i].BaseURL, "/") == base {
-			return m.cfg.Providers[i].Name
-		}
-	}
-	if m.cfg.Default != nil {
-		return m.cfg.Default.Name
-	}
-	return "default"
-}
-
 func (m *model) openPicker(kind overlayKind) {
 	var title string
 	var items []list.Item
 	switch kind {
-	case overlayModelPicker:
-		title = "Select model"
-		items = buildModelItems(m.cfg, m.rt.Model.Model, m.activeProviderName())
 	case overlaySessionPicker:
 		title = "Resume session"
 		if m.sess != nil {
@@ -667,15 +606,8 @@ func (m *model) applyPickerSelection() (tea.Model, tea.Cmd) {
 	if !ok {
 		return m, nil
 	}
-	switch entry.value.(type) {
-	case modelSelection:
-		if sel, ok := entry.value.(modelSelection); ok {
-			m.applyProvider(sel.provider, sel.model)
-		}
-	case session.Summary:
-		if sum, ok := entry.value.(session.Summary); ok {
-			m.loadSession(sum.ID)
-		}
+	if sum, ok := entry.value.(session.Summary); ok {
+		m.loadSession(sum.ID)
 	}
 	return m, nil
 }
@@ -738,32 +670,12 @@ func (m *model) historyNext() {
 	m.syncInputHeight()
 }
 
-func (m *model) togglePanel() {
-	m.panelOpen = !m.panelOpen
-	if m.panelOpen {
-		m.refreshPanel()
-		m.panelScroll = 0
-	}
-}
-
 func (m *model) toggleTools() {
 	m.toolsCollapsed = !m.toolsCollapsed
 }
 
 func (m *model) toggleHelp() {
 	m.helpOpen = !m.helpOpen
-}
-
-func (m *model) refreshPanel() {
-	files, _ := m.rt.WS.List(".")
-	status, _ := m.rt.WS.GitStatus()
-	todos := ""
-	if data, err := m.rt.WS.Read("TODO.md"); err == nil {
-		todos = data
-	} else if data, err := m.rt.WS.Read("motive-todos.md"); err == nil {
-		todos = data
-	}
-	m.panelLines = buildPanel(files, status, todos)
 }
 
 func (m *model) openDiff() {
@@ -902,9 +814,6 @@ func (m model) statusLine() string {
 	if m.sessionID != "" {
 		b.WriteString(" · " + m.sessionID)
 	}
-	if m.panelOpen {
-		b.WriteString(" · panel")
-	}
 	if m.helpOpen {
 		b.WriteString(" · help")
 	}
@@ -975,14 +884,14 @@ func (m *model) View() tea.View {
 	if m.overlay == overlayDiff {
 		return m.diffView(width, height)
 	}
-	if m.overlay == overlayModelPicker || m.overlay == overlaySessionPicker {
+	if m.overlay == overlaySessionPicker {
 		return m.pickerView(width, height)
 	}
 
 	status := m.statusLine()
 	statusH := lineCount(status)
 	panelW := 0
-	if m.panelOpen || m.helpOpen {
+	if m.helpOpen {
 		panelW = min(36, width/3)
 		if panelW < 24 {
 			panelW = 24
@@ -1064,17 +973,7 @@ func (m model) renderRightColumn(panelH int) []string {
 	if m.helpOpen {
 		lines = append(lines, buildHelpLines(m.keys)...)
 	}
-	if m.panelOpen {
-		if len(lines) > 0 {
-			lines = append(lines, "")
-		}
-		lines = append(lines, m.panelLines...)
-	}
-	scroll := 0
-	if !m.helpOpen {
-		scroll = m.panelScroll
-	}
-	return panelWindow(lines, scroll, panelH)
+	return panelWindow(lines, 0, panelH)
 }
 
 // buildHelpLines returns styled rows for the help box.
@@ -1087,11 +986,8 @@ func buildHelpLines(k Keymap) []string {
 		{string(k.Run), "Send message"},
 		{string(k.Newline), "Insert newline"},
 		{string(k.CycleEffort), "Cycle effort"},
-		{string(k.CycleModel), "Cycle provider"},
-		{string(k.ModelPicker), "Model picker"},
 		{string(k.SessionPicker), "Session picker"},
 		{string(k.DiffToggle), "Git diff"},
-		{string(k.PanelToggle), "Toggle panel"},
 		{string(k.ToolsToggle), "Toggle tools"},
 		{string(k.Help), "Toggle help (this)"},
 		{string(k.ScrollUp), "Scroll up"},

@@ -80,19 +80,6 @@ func TestColorizeDiffEmpty(t *testing.T) {
 	}
 }
 
-func TestBuildPanelSections(t *testing.T) {
-	lines := buildPanel(
-		"src/main.go\nsrc/pkg/\n",
-		"M src/main.go\n?? new.go\n",
-		"- fix tests\n- add docs\n")
-	joined := strings.Join(lines, "\n")
-	for _, want := range []string{"Workspace", "src/main.go", "src/pkg/", "Git", "fix tests", "TODO"} {
-		if !strings.Contains(joined, want) {
-			t.Errorf("panel missing %q:\n%s", want, joined)
-		}
-	}
-}
-
 func TestZipColumns(t *testing.T) {
 	left := []string{"a", "b"}
 	right := []string{"x"}
