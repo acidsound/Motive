@@ -3,7 +3,7 @@
 Run from the repository root after pulling:
 
 ```bash
-python3 scripts/benchmark_final.py \
+python3 docs/benchmark/benchmark_final.py \
   --url http://100.72.102.121:18080/v1 \
   --model Qwen3.8-27B \
   --tokens 8000 10000 12000 \

@@ -26,7 +26,7 @@ This makes the experiment reproducible and keeps benchmark inputs separate from 
 Keep the llama-server command line unchanged during the experiment. Use the same model, context size, KV-cache quantization, batch sizes, speculative decoding, temperature, and reasoning configuration that produced the Motive latency spike.
 
 ```bash
-python3 scripts/benchmark_llama_server.py \
+python3 docs/benchmark/benchmark_llama_server.py \
   --url http://100.72.102.121:18080/v1 \
   --model Qwen3.8-27B \
   --tokens 8000 10000 12000 \
@@ -38,7 +38,7 @@ python3 scripts/benchmark_llama_server.py \
 The four cases are enabled by default. To run a subset:
 
 ```bash
-python3 scripts/benchmark_llama_server.py \
+python3 docs/benchmark/benchmark_llama_server.py \
   --url http://100.72.102.121:18080/v1 \
   --model Qwen3.8-27B \
   --tokens 8000 10000 12000 \
