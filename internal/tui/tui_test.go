@@ -120,9 +120,9 @@ func TestToolsCollapsedRendering(t *testing.T) {
 	m := newTestModel()
 	m.width = 60
 	msg := message{
-		role:  "assistant",
+		role:    "assistant",
 		content: "done",
-		tools: []string{"shell · 12B · 5ms", "read_file · 30B · 2ms", "write_file · 45B · 8ms"},
+		tools:   []string{"shell · 12B · 5ms", "read_file · 30B · 2ms", "write_file · 45B · 8ms"},
 	}
 
 	// Expanded: each tool gets its own line.

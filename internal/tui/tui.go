@@ -360,6 +360,9 @@ func (m model) handleOverlayKey(msg tea.KeyPressMsg) (tea.Model, tea.Cmd) {
 		return m, nil
 
 	case overlayHelp:
+		if key == string(m.keys.Help) {
+			m.overlay = overlayNone
+		}
 		return m, nil
 	}
 	return m, nil
@@ -853,7 +856,7 @@ func (m model) View() tea.View {
 	if bodyW < 20 {
 		bodyW = 20
 	}
-	avail := height - m.inputH - statusH - 1
+	avail := height - m.inputH - statusH
 	transcript := m.renderTranscript(bodyW, avail)
 
 	var body []string
@@ -863,6 +866,9 @@ func (m model) View() tea.View {
 		body = zipColumns(transcript, panel, bodyW, panelW)
 	} else {
 		body = transcript
+	}
+	for len(body) < avail {
+		body = append(body, "")
 	}
 
 	var b strings.Builder
