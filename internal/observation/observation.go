@@ -3,6 +3,7 @@ package observation
 import (
 	"crypto/sha256"
 	"encoding/hex"
+	"encoding/json"
 	"fmt"
 	"regexp"
 	"strconv"
@@ -35,6 +36,15 @@ type State struct {
 }
 
 func New() *State { return &State{Files: map[string]File{}} }
+
+func (s *State) ObserveRead(rawArguments, content string, step int) (File, bool) {
+	var args map[string]any
+	if err := json.Unmarshal([]byte(rawArguments), &args); err != nil {
+		return File{}, false
+	}
+	path, _ := args["path"].(string)
+	return s.ObserveFile(path, content, step)
+}
 
 func (s *State) ObserveFile(path, content string, step int) (File, bool) {
 	s.mu.Lock()
