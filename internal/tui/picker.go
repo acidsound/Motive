@@ -71,10 +71,10 @@ func shortRev(rev string) string {
 }
 
 var (
-	styleDim        = lipgloss.NewStyle().Faint(true)
-	styleDiffHeader = lipgloss.NewStyle().Bold(true).Foreground(lipgloss.Color(colorPrompt))
-	styleDiffMeta   = lipgloss.NewStyle().Foreground(lipgloss.Color(colorEffort))
-	styleDiffAdd    = lipgloss.NewStyle().Foreground(lipgloss.Color("#9ece6a"))
-	styleDiffDel    = lipgloss.NewStyle().Foreground(lipgloss.Color(colorError))
+	styleDim          = lipgloss.NewStyle().Faint(true)
+	styleDiffHeader   = lipgloss.NewStyle().Bold(true).Foreground(lipgloss.Color(colorPrompt))
+	styleDiffMeta     = lipgloss.NewStyle().Foreground(lipgloss.Color(colorEffort))
+	styleDiffAdd      = lipgloss.NewStyle().Foreground(lipgloss.Color("#9ece6a"))
+	styleDiffDel      = lipgloss.NewStyle().Foreground(lipgloss.Color(colorError))
 	stylePanelHeading = lipgloss.NewStyle().Bold(true).Foreground(lipgloss.Color(colorPrompt))
 )
