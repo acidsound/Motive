@@ -46,7 +46,6 @@ type ExecutionBudget struct {
 }
 
 type Observation struct {
-	Step             int
 	ToolFailures     int
 	TotalToolCalls   int
 	LastToolFailure  bool
@@ -249,10 +248,12 @@ func (r *Runtime) Execute(ctx context.Context, request string) (string, error) {
 				result = "ERROR: tool call has an empty name and was ignored"
 				toolFailed = true
 			} else {
-				var err error
-				result, err = r.Exec.Run(ctx, call.Function.Name, call.Function.Arguments)
-				if err != nil {
-					result = "ERROR: " + err.Error()
+				var toolErr error
+				result, toolErr = r.Exec.Run(ctx, call.Function.Name, call.Function.Arguments)
+				if toolErr != nil {
+					if result == "" {
+						result = "ERROR: " + toolErr.Error()
+					}
 					toolFailed = true
 				}
 			}
@@ -265,12 +266,6 @@ func (r *Runtime) Execute(ctx context.Context, request string) (string, error) {
 		}
 		obs.LastToolFailure = toolFailed
 
-		// Make runtime state visible to the model without requiring it to infer
-		// latency, failures, or remaining budget from tool output alone.
-		messages = append(messages, model.Message{Role: "system", Content: obs.context(stepNumber, budget, started, effort, baseRevision, r.WS.GitHEAD())})
-
-		// Observe the completed turn and adapt the next turn. Normal execution
-		// stays cheap; recovery after a tool failure gets one xhigh turn.
 		if toolFailed {
 			effort = "xhigh"
 		} else {
@@ -281,35 +276,4 @@ func (r *Runtime) Execute(ctx context.Context, request string) (string, error) {
 	err := fmt.Errorf("execution budget exceeded: %d steps", budget.MaxSteps)
 	r.emit(TraceEvent{Kind: "finish", Step: budget.MaxSteps, MaxSteps: budget.MaxSteps, TotalToolCalls: obs.TotalToolCalls, TotalElapsed: time.Since(started), ReasoningEffort: effort, BaseRevision: baseRevision, ResultRevision: r.WS.GitHEAD(), Error: err})
 	return "", err
-}
-
-func (o Observation) context(step int, budget ExecutionBudget, started time.Time, effort, baseRevision, resultRevision string) string {
-	remainingSteps := budget.MaxSteps - step
-	remainingTools := budget.MaxToolCalls - o.TotalToolCalls
-	if remainingSteps < 0 {
-		remainingSteps = 0
-	}
-	if remainingTools < 0 {
-		remainingTools = 0
-	}
-	return fmt.Sprintf("[motive self-observation]\nstep=%d/%d\nremaining_steps=%d\ntool_calls=%d/%d\ntool_failures=%d\nlast_tool_failed=%t\ncurrent_reasoning_effort=%s\nlast_model_latency=%s\nlast_predicted_tokens=%d\nlast_predicted_latency=%.0fms\nelapsed=%s\nremaining_time=%s\nbase_revision=%s\nresult_revision=%s",
-		step, budget.MaxSteps, remainingSteps, o.TotalToolCalls, budget.MaxToolCalls, o.ToolFailures, o.LastToolFailure, effort, o.LastModelLatency.Round(time.Millisecond), o.LastPredictedN, o.LastPredictedMS, time.Since(started).Round(time.Millisecond), maxDuration(0, budget.MaxDuration-time.Since(started)).Round(time.Second), shortRevision(baseRevision), shortRevision(resultRevision))
-}
-
-func maxDuration(a, b time.Duration) time.Duration {
-	if a > b {
-		return a
-	}
-	return b
-}
-
-func shortRevision(revision string) string {
-	revision = strings.TrimSpace(revision)
-	if revision == "" {
-		return "-"
-	}
-	if len(revision) > 12 {
-		return revision[:12]
-	}
-	return revision
 }
