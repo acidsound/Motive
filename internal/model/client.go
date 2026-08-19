@@ -152,7 +152,11 @@ func NewFromEnv() *Client {
 		Temperature:     envFloat("MOTIVE_TEMPERATURE", envFloat("OPENAI_TEMPERATURE", 0.6)),
 		MaxTokens:       envInt("MOTIVE_MAX_TOKENS", envInt("OPENAI_MAX_TOKENS", 0)),
 		ReasoningEffort: normalizeEffort(env("MOTIVE_REASONING_EFFORT", "low")),
-		HTTP:            &http.Client{Timeout: 10 * time.Minute},
+		HTTP: &http.Client{
+			Transport: &http.Transport{
+				ResponseHeaderTimeout: 30 * time.Second,
+			},
+		},
 	}
 }
 
