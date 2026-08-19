@@ -270,3 +270,31 @@ func TestDynamicInputHeightShrinkOnSubmit(t *testing.T) {
 		t.Errorf("inputH after submit = %d, want 1", m.inputH)
 	}
 }
+
+func TestShiftEnterRendering(t *testing.T) {
+	m := newTestModel()
+	m.width = 80
+	m.height = 20
+
+	m.input.SetValue("hello")
+	m.syncInputHeight()
+
+	// Trigger shift+enter via handleKey
+	m2, _ := m.handleKey(tea.KeyPressMsg{Text: "\n", Code: tea.KeyEnter, Mod: tea.ModShift})
+	m = m2.(model)
+
+	if m.inputH != 2 {
+		t.Errorf("inputH = %d, want 2", m.inputH)
+	}
+	if offset := m.input.ScrollYOffset(); offset != 0 {
+		t.Errorf("ScrollYOffset = %d, want 0", offset)
+	}
+
+	view := m.View()
+	if !strings.Contains(view.Content, "hello") {
+		t.Errorf("view missing first line content 'hello':\n%s", view.Content)
+	}
+	if !strings.Contains(view.Content, "> ") {
+		t.Errorf("view missing prompt '> ':\n%s", view.Content)
+	}
+}

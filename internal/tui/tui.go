@@ -142,6 +142,21 @@ func (m *model) syncInputHeight() {
 	}
 	m.inputH = h
 	m.input.SetHeight(h)
+
+	// Ensure the viewport scroll position stays optimal:
+	// When height expands, textarea's viewport offset may remain scrolled down
+	// even though all lines fit, hiding earlier lines (like line 0 and '>').
+	if m.input.ScrollYOffset() > 0 {
+		if lines <= h || lines-m.input.ScrollYOffset() < h {
+			savedLine := m.input.Line()
+			savedCol := m.input.Column()
+			m.input.MoveToBegin()
+			for i := 0; i < savedLine; i++ {
+				m.input.CursorDown()
+			}
+			m.input.SetCursorColumn(savedCol)
+		}
+	}
 }
 
 func newModel(rt *runtime.Runtime, cfg *config.Config, sess *session.Store, startPicker bool) model {
@@ -268,8 +283,7 @@ func (m model) handleKey(msg tea.KeyPressMsg) (tea.Model, tea.Cmd) {
 		return m.submit()
 
 	case string(m.keys.Newline):
-		m.input.SetValue(m.input.Value() + "\n")
-		m.input.MoveToEnd()
+		m.input.InsertString("\n")
 		m.syncInputHeight()
 		return m, nil
 
