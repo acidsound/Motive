@@ -12,6 +12,9 @@ func TestDefaultKeymap(t *testing.T) {
 	if k.ScrollUp != "ctrl+k" || k.ModelPicker != "ctrl+m" || k.Run != "enter" {
 		t.Fatalf("unexpected defaults: %+v", k)
 	}
+	if k.PageUp != "ctrl+shift+k" || k.PageDown != "ctrl+shift+j" {
+		t.Errorf("page bindings = %q/%q, want ctrl+shift+k/j", k.PageUp, k.PageDown)
+	}
 	if k.ToolsToggle != "ctrl+t" {
 		t.Errorf("ToolsToggle = %q, want ctrl+t", k.ToolsToggle)
 	}

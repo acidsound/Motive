@@ -19,13 +19,21 @@ request
 
 Each user request starts with a fresh model context. The persistent world is the workspace, its files, and Git state rather than chat history.
 
+## Build
+
+By policy, the binary is always built into `bin/`. `bin/` is git-ignored, so the
+binary itself is never committed; only the source is.
+
+```bash
+go build -o bin/motive ./cmd/motive
+```
+
 ## Run
 
 ```bash
-go build -o motive ./cmd/motive
-./motive --tui
-./motive "inspect this project and fix the failing test"
-./motive --tui -r   # open the session picker on start
+./bin/motive --tui
+./bin/motive "inspect this project and fix the failing test"
+./bin/motive --tui -r   # open the session picker on start
 ```
 
 Configuration:
@@ -79,8 +87,8 @@ shift+enter    newline        ctrl+tab       cycle provider
 ctrl+m         model picker   ctrl+r         session picker
 ctrl+d         git diff view  ctrl+s         side panel (files/git/todo)
 ctrl+t         toggle tools   ctrl+/         toggle help
-ctrl+k / ctrl+j     scroll up / down
-alt+u / alt+d       page up / down
+ctrl+k / ctrl+j              scroll up / down
+ctrl+shift+k / ctrl+shift+j  page up / down
 up / down           prompt history (empty input)
 ctrl+g         bookmark       ctrl+l         clear transcript
 esc / ctrl+c   quit

@@ -28,6 +28,7 @@ const (
 	colorIdle      = "#9ece6a"
 	colorEffort    = "#e0af68"
 	colorBookmark  = "#e0af68"
+	colorScrollPos = "#7dcfff"
 )
 
 var (
@@ -42,6 +43,7 @@ var (
 	styleIdle      = lipgloss.NewStyle().Foreground(lipgloss.Color(colorIdle))
 	styleEffort    = lipgloss.NewStyle().Foreground(lipgloss.Color(colorEffort))
 	styleBookmark  = lipgloss.NewStyle().Foreground(lipgloss.Color(colorBookmark))
+	styleScrollPos = lipgloss.NewStyle().Foreground(lipgloss.Color(colorScrollPos))
 )
 
 type streamMsg struct {
@@ -94,6 +96,13 @@ type model struct {
 	height int
 	inputH int
 	scroll int
+
+	// Scroll position of the transcript viewport, refreshed on each render so
+	// the input area can report where in the full transcript the user is
+	// currently looking.
+	transcriptTotal int // total rendered transcript lines
+	transcriptTop   int // 0-based index of the first visible line
+	transcriptAvail int // visible viewport height
 
 	step      int
 	maxSteps  int
@@ -220,7 +229,7 @@ func (m model) Init() tea.Cmd {
 	return tea.Batch(cmds...)
 }
 
-func (m model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
+func (m *model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 	switch msg := msg.(type) {
 	case doneMsg:
 		return m.finishTurn(msg)
@@ -261,7 +270,7 @@ func (m model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 	return m, cmd
 }
 
-func (m model) handleKey(msg tea.KeyPressMsg) (tea.Model, tea.Cmd) {
+func (m *model) handleKey(msg tea.KeyPressMsg) (tea.Model, tea.Cmd) {
 	if m.overlay != overlayNone {
 		return m.handleOverlayKey(msg)
 	}
@@ -385,7 +394,7 @@ func (m model) handleKey(msg tea.KeyPressMsg) (tea.Model, tea.Cmd) {
 	return m, cmd
 }
 
-func (m model) handleOverlayKey(msg tea.KeyPressMsg) (tea.Model, tea.Cmd) {
+func (m *model) handleOverlayKey(msg tea.KeyPressMsg) (tea.Model, tea.Cmd) {
 	key := msg.String()
 	if key == "esc" || key == "ctrl+c" {
 		m.overlay = overlayNone
@@ -419,7 +428,7 @@ func (m model) handleOverlayKey(msg tea.KeyPressMsg) (tea.Model, tea.Cmd) {
 // submit starts a new execution turn: records history, appends transcript
 // entries, opens the assistant message the stream fills, and persists the user
 // request to the current session.
-func (m model) submit() (tea.Model, tea.Cmd) {
+func (m *model) submit() (tea.Model, tea.Cmd) {
 	request := strings.TrimSpace(m.input.Value())
 	if request == "" {
 		return m, nil
@@ -463,7 +472,7 @@ func (m model) submit() (tea.Model, tea.Cmd) {
 	return m, execute(m.rt, request)
 }
 
-func (m model) finishTurn(done doneMsg) (tea.Model, tea.Cmd) {
+func (m *model) finishTurn(done doneMsg) (tea.Model, tea.Cmd) {
 	m.busy = false
 	if done.err != nil {
 		// Drop the empty assistant placeholder that submit() appended so an
@@ -515,7 +524,7 @@ func (m *model) saveAssistantEntry() {
 	})
 }
 
-func (m model) handleTrace(event runtime.TraceEvent) (tea.Model, tea.Cmd) {
+func (m *model) handleTrace(event runtime.TraceEvent) (tea.Model, tea.Cmd) {
 	m.elapsed = event.TotalElapsed
 	switch event.Kind {
 	case "start":
@@ -575,14 +584,13 @@ func (m *model) lastAssistantActive() bool {
 
 func (m *model) cycleEffort() {
 	current := m.rt.Model.GetReasoningEffort()
-	next := "low"
-	switch current {
-	case "low":
-		next = "medium"
-	case "medium":
-		next = "xhigh"
-	default:
-		next = "low"
+	order := []string{"low", "medium", "high", "xhigh", "max"}
+	next := order[0]
+	for i, lvl := range order {
+		if lvl == current {
+			next = order[(i+1)%len(order)]
+			break
+		}
 	}
 	m.rt.Model.SetReasoningEffort(next)
 }
@@ -649,7 +657,7 @@ func (m *model) openPicker(kind overlayKind) {
 	m.overlay = kind
 }
 
-func (m model) applyPickerSelection() (tea.Model, tea.Cmd) {
+func (m *model) applyPickerSelection() (tea.Model, tea.Cmd) {
 	item := m.list.SelectedItem()
 	m.overlay = overlayNone
 	if item == nil {
@@ -778,8 +786,9 @@ func execute(rt *runtime.Runtime, request string) tea.Cmd {
 }
 
 // renderTranscript lays out every message (newest at the bottom), applies the
-// scroll offset, and returns the visible lines.
-func (m model) renderTranscript(width, available int) []string {
+// scroll offset, and returns the visible lines. It also records the viewport's
+// position within the full transcript for the scroll position indicator.
+func (m *model) renderTranscript(width, available int) []string {
 	var all []string
 	for _, msg := range m.messages {
 		lines := m.renderMessage(msg, width)
@@ -795,6 +804,17 @@ func (m model) renderTranscript(width, available int) []string {
 	}
 	start := 0
 	if available > 0 {
+		// Clamp the scroll offset to the distance to the very top of the
+		// transcript. Without this, repeated PageUp/ScrollUp presses inflate
+		// the offset unboundedly, and PageDown then needs many presses before
+		// the viewport visibly moves again (it appears stuck at the top).
+		maxScroll := len(all) - available
+		if maxScroll < 0 {
+			maxScroll = 0
+		}
+		if m.scroll > maxScroll {
+			m.scroll = maxScroll
+		}
 		start = len(all) - available - m.scroll
 		if start < 0 {
 			start = 0
@@ -807,6 +827,11 @@ func (m model) renderTranscript(width, available int) []string {
 	if available > 0 && len(out) > available {
 		out = out[:available]
 	}
+	// Record where the current viewport sits within the full transcript so the
+	// input area can report the scroll position.
+	m.transcriptTotal = len(all)
+	m.transcriptTop = start
+	m.transcriptAvail = available
 	return out
 }
 
@@ -889,6 +914,50 @@ func (m model) statusLine() string {
 	return styleStatus.Render(b.String())
 }
 
+// scrollPosition reports the current viewport location within the full
+// transcript, e.g. "↑ 12/456" where 12 is the first visible line of 456.
+// It returns an empty string while the viewport is pinned to the newest
+// content at the bottom, so the indicator only appears while scrolled up.
+func (m model) scrollPosition() string {
+	if m.transcriptTotal <= 0 || m.transcriptAvail <= 0 {
+		return ""
+	}
+	atBottom := m.scroll == 0 && m.transcriptTop+m.transcriptAvail >= m.transcriptTotal
+	if atBottom {
+		return ""
+	}
+	top := m.transcriptTop + 1
+	if top < 1 {
+		top = 1
+	}
+	return fmt.Sprintf("↑ %d/%d", top, m.transcriptTotal)
+}
+
+// renderInputView overlays the transcript scroll position at the right edge of
+// the input box's last line so it is visible exactly where the user types while
+// paging or scrolling through older content. It leaves the input untouched when
+// the viewport is pinned to the newest content at the bottom.
+func (m model) renderInputView(inputView string) string {
+	pos := m.scrollPosition()
+	if pos == "" || inputView == "" || m.width <= 0 {
+		return inputView
+	}
+	lines := strings.Split(inputView, "\n")
+	if len(lines) == 0 {
+		return inputView
+	}
+	marker := styleScrollPos.Render(pos)
+	last := lines[len(lines)-1]
+	lastW := lipgloss.Width(last)
+	markerW := lipgloss.Width(marker)
+	avail := m.width - lastW - markerW - 1
+	if avail < 1 {
+		return inputView
+	}
+	lines[len(lines)-1] = last + strings.Repeat(" ", avail) + marker
+	return strings.Join(lines, "\n")
+}
+
 func (m model) revisionLabel() string {
 	base := shortRev(m.baseRev)
 	if base == "" {
@@ -900,7 +969,7 @@ func (m model) revisionLabel() string {
 	return base
 }
 
-func (m model) View() tea.View {
+func (m *model) View() tea.View {
 	width := max(20, m.width)
 	height := max(6, m.height)
 	if m.overlay == overlayDiff {
@@ -948,7 +1017,7 @@ func (m model) View() tea.View {
 	}
 	b.WriteString(status)
 	b.WriteString("\n")
-	b.WriteString(m.input.View())
+	b.WriteString(m.renderInputView(m.input.View()))
 
 	v := tea.NewView(b.String())
 	v.AltScreen = true

@@ -20,7 +20,7 @@ func TestFinishTurnNoStreaming(t *testing.T) {
 
 	// Simulate doneMsg arriving with the full text (no deltas came through)
 	m2, _ := m.finishTurn(doneMsg{text: "world", err: nil})
-	m = m2.(model)
+	m = *m2.(*model)
 
 	if len(m.messages) != 2 {
 		t.Fatalf("messages = %d, want 2 (got: %+v)", len(m.messages), m.messages)
@@ -44,7 +44,7 @@ func TestFinishTurnWithStreaming(t *testing.T) {
 	m.busy = true
 
 	m2, _ := m.finishTurn(doneMsg{text: "world", err: nil})
-	m = m2.(model)
+	m = *m2.(*model)
 
 	if len(m.messages) != 2 {
 		t.Fatalf("messages = %d, want 2 (got: %+v)", len(m.messages), m.messages)

@@ -38,8 +38,9 @@ func TestNormalizeEffort(t *testing.T) {
 		{"low", "low"},
 		{"MEDIUM", "medium"},
 		{" xhigh ", "xhigh"},
-		{"high", "low"},
-		{"max", "low"},
+		{"high", "high"},
+		{"MAX", "max"},
+		{"max", "max"},
 		{"none", "low"},
 		{"unknown", "low"},
 	} {
@@ -85,6 +86,9 @@ func TestChatStreamAccumulatesDeltas(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
+	if msg.Role != "assistant" {
+		t.Errorf("role = %q, want %q", msg.Role, "assistant")
+	}
 	if msg.Content != "Hello" {
 		t.Errorf("content = %q, want %q", msg.Content, "Hello")
 	}
@@ -119,6 +123,29 @@ func TestChatStreamAccumulatesDeltas(t *testing.T) {
 	}
 }
 
+func TestChatStreamDefaultsRoleWhenOmittedInDeltas(t *testing.T) {
+	body := strings.Join([]string{
+		`data: {"choices":[{"delta":{"content":"Hi"}}]}]`,
+		`data: [DONE]`,
+		``,
+	}, "\n")
+
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Type", "text/event-stream")
+		fmt.Fprint(w, body)
+	}))
+	defer srv.Close()
+
+	client := &Client{BaseURL: srv.URL, Model: "test", HTTP: http.DefaultClient}
+	msg, _, err := client.ChatStream(context.Background(), nil, nil, "low", nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if msg.Role != "assistant" {
+		t.Fatalf("msg.Role = %q, want assistant", msg.Role)
+	}
+}
+
 func TestChatStreamFallsBackToPlainJSON(t *testing.T) {
 	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		w.Header().Set("Content-Type", "application/json")
@@ -131,8 +158,31 @@ func TestChatStreamFallsBackToPlainJSON(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
+	if msg.Role != "assistant" {
+		t.Errorf("role = %q, want %q", msg.Role, "assistant")
+	}
 	if msg.Content != "plain reply" {
 		t.Errorf("content = %q, want %q", msg.Content, "plain reply")
+	}
+}
+
+func TestChatWithEffortDefaultsRole(t *testing.T) {
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Type", "application/json")
+		fmt.Fprint(w, `{"choices":[{"message":{"content":"no role in json"}}]}`)
+	}))
+	defer srv.Close()
+
+	client := &Client{BaseURL: srv.URL, Model: "test", HTTP: http.DefaultClient}
+	msg, _, err := client.ChatWithEffort(context.Background(), nil, nil, "low")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if msg.Role != "assistant" {
+		t.Fatalf("msg.Role = %q, want assistant", msg.Role)
+	}
+	if msg.Content != "no role in json" {
+		t.Fatalf("msg.Content = %q, want %q", msg.Content, "no role in json")
 	}
 }
 

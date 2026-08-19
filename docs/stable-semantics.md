@@ -113,10 +113,12 @@ Session persistence is a transcript record, not a model context. Resuming a sess
 
 ## 9. Reasoning effort
 
-Reasoning effort is a runtime model parameter. The supported normalized values in the current Motive/Qwen deployment contract are:
+Reasoning effort is a runtime model parameter. Motive accepts the full standard vocabulary — `low`, `medium`, `high`, `xhigh`, `max` — and passes the selected value through to the model server; a provider that does not support a level rejects it rather than Motive silently substituting a different level. Only unknown or empty values fall back to `low`. **[SOURCE][DECISION]**
+
+The supported normalized values are:
 
 ```text
-low, medium, xhigh
+low, medium, high, xhigh, max
 ```
 
 **[SOURCE][DECISION]**
@@ -127,7 +129,7 @@ The configured effort is sent to the model request both as `reasoning_effort` an
 
 During execution, the runtime may temporarily escalate to `xhigh` after a tool failure, then restore the configured default effort on a subsequent turn. **[SOURCE][DECISION]**
 
-The TUI exposes the three supported levels and cycles them with `Ctrl+E`. **[SOURCE]**
+The TUI exposes the five recognized levels and cycles them with `Ctrl+E`. **[SOURCE]**
 
 The precise mapping between these symbolic effort levels and model-specific compute is provider/model dependent and remains **[UNKNOWN]** at the Motive semantic layer.
 
@@ -240,7 +242,7 @@ The TUI status bar displays the active model, reasoning effort, step/tool/elapse
 4. **Concrete tool loop:** tool calls and their results form the iterative execution mechanism. **[SOURCE]**
 5. **Bounded execution:** an execution cannot exceed its configured step, duration, or tool-call budget. **[SOURCE]**
 6. **Observable revision state:** execution records its base and resulting Git revisions. **[SOURCE]**
-7. **Explicit reasoning configuration:** reasoning effort is a runtime parameter with `low` as the current default and `low/medium/xhigh` as the supported normalized levels. **[SOURCE][DECISION]**
+7. **Explicit reasoning configuration:** reasoning effort is a runtime parameter with `low` as the current default and `low/medium/high/xhigh/max` as the recognized normalized levels, passed through to the provider. **[SOURCE][DECISION]**
 8. **Recovery escalation is temporary:** failure-driven `xhigh` escalation does not replace the configured default effort. **[SOURCE]**
 9. **Telemetry is observational:** execution telemetry describes what happened and is not itself evidence that autonomous adaptation is implemented. **[DECISION]**
 10. **Runtime self-observation is bounded:** model-visible observations contain execution metadata, not hidden reasoning content. **[DECISION]**
@@ -269,7 +271,7 @@ The next work should proceed in this order:
 
 1. **Execution budget semantics:** make the distinction between runtime loop budget and per-turn model reasoning budget explicit and observable.
 2. **Reasoning telemetry:** expose enough bounded telemetry to identify abnormal reasoning generation without exposing hidden chain-of-thought.
-3. **TUI reasoning control:** retain `low` as the default and allow deliberate user changes among `low`, `medium`, and `xhigh`.
+3. **TUI reasoning control:** retain `low` as the default and allow deliberate user changes among `low`, `medium`, `high`, `xhigh`, and `max`.
 4. **Recovery policy:** verify and constrain failure-driven escalation and restoration behavior.
 5. **Self-observation:** use the bounded runtime observations to detect execution anomalies before introducing autonomous policy changes.
 6. **Self-modification:** only after observation semantics are stable, evaluate model-directed modification policies and safeguards.

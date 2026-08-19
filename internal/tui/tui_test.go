@@ -1,6 +1,7 @@
 package tui
 
 import (
+	"strconv"
 	"strings"
 	"testing"
 
@@ -108,7 +109,7 @@ func TestRenderTranscriptKeepsNewestAtBottom(t *testing.T) {
 func TestCycleEffort(t *testing.T) {
 	m := newTestModel()
 	m.rt.Model = &llm.Client{ReasoningEffort: "low"}
-	steps := []string{"medium", "xhigh", "low"}
+	steps := []string{"medium", "high", "xhigh", "max", "low"}
 	for _, want := range steps {
 		m.cycleEffort()
 		if got := m.rt.Model.GetReasoningEffort(); got != want {
@@ -213,7 +214,7 @@ func TestEscClosesHelp(t *testing.T) {
 	if cmd != nil {
 		t.Fatalf("expected no quit cmd when closing help, got: %v", cmd)
 	}
-	m = m2.(model)
+	m = *m2.(*model)
 	if m.helpOpen {
 		t.Fatal("esc should close helpOpen")
 	}
@@ -265,7 +266,7 @@ func TestDynamicInputHeightShrinkOnSubmit(t *testing.T) {
 	}
 
 	m2, _ := m.submit()
-	m = m2.(model)
+	m = *m2.(*model)
 	if m.inputH != 1 {
 		t.Errorf("inputH after submit = %d, want 1", m.inputH)
 	}
@@ -281,7 +282,7 @@ func TestShiftEnterRendering(t *testing.T) {
 
 	// Trigger shift+enter via handleKey
 	m2, _ := m.handleKey(tea.KeyPressMsg{Text: "\n", Code: tea.KeyEnter, Mod: tea.ModShift})
-	m = m2.(model)
+	m = *m2.(*model)
 
 	if m.inputH != 2 {
 		t.Errorf("inputH = %d, want 2", m.inputH)
@@ -296,5 +297,102 @@ func TestShiftEnterRendering(t *testing.T) {
 	}
 	if !strings.Contains(view.Content, "> ") {
 		t.Errorf("view missing prompt '> ':\n%s", view.Content)
+	}
+}
+
+func TestPageDownRecoversAfterExcessivePageUp(t *testing.T) {
+	m := newTestModel()
+	m.width = 60
+	m.height = 20
+	// Transcript much taller than the viewport so it is scrollable. Each
+	// message is distinct so a moving viewport is detectable.
+	for i := 0; i < 40; i++ {
+		m.appendMessage(message{role: "user", content: "message " + strconv.Itoa(i)})
+	}
+
+	// Simulate hammering PageUp far beyond the actual transcript top: the
+	// scroll offset becomes huge and would take many PageDown presses to
+	// drain if it were not clamped during render.
+	m.scroll = 10000
+
+	// Rendering must clamp the offset to the true top of the transcript.
+	topView := m.View().Content
+	if m.scroll >= 10000 {
+		t.Fatalf("scroll not clamped by render: scroll = %d", m.scroll)
+	}
+
+	// A single PageDown must immediately move the viewport off the top.
+	m.scroll = max(0, m.scroll-m.height/2)
+	downView := m.View().Content
+
+	if topView == downView {
+		t.Fatalf("viewport did not move after a single PageDown following excessive PageUp")
+	}
+}
+
+func TestScrollPositionIndicator(t *testing.T) {
+	m := newTestModel()
+	m.width = 60
+	m.height = 20
+	for i := 0; i < 40; i++ {
+		m.appendMessage(message{role: "user", content: "message " + strconv.Itoa(i)})
+	}
+
+	// Pinned to the bottom: no indicator.
+	m.scroll = 0
+	m.View()
+	if pos := m.scrollPosition(); pos != "" {
+		t.Errorf("scrollPosition at bottom = %q, want empty", pos)
+	}
+
+	// Scrolled up partway: indicator shows the first visible line over total.
+	m.scroll = 30
+	m.View()
+	pos := m.scrollPosition()
+	if pos == "" {
+		t.Fatal("scrollPosition while scrolled up should not be empty")
+	}
+	if !strings.Contains(pos, "/"+strconv.Itoa(m.transcriptTotal)) {
+		t.Errorf("scrollPosition %q should reference the total %d", pos, m.transcriptTotal)
+	}
+	if !strings.HasPrefix(pos, "↑ ") {
+		t.Errorf("scrollPosition %q should start with the ↑ marker", pos)
+	}
+
+	// Scrolled to the very top.
+	m.scroll = 10000
+	m.View()
+	if m.transcriptTop != 0 {
+		t.Fatalf("transcriptTop = %d, want 0 at top", m.transcriptTop)
+	}
+	if got := m.scrollPosition(); got != "↑ 1/"+strconv.Itoa(m.transcriptTotal) {
+		t.Errorf("scrollPosition at top = %q, want ↑ 1/%d", got, m.transcriptTotal)
+	}
+}
+
+func TestScrollPositionInInputArea(t *testing.T) {
+	m := newTestModel()
+	m.width = 60
+	m.height = 20
+	for i := 0; i < 40; i++ {
+		m.appendMessage(message{role: "user", content: "message " + strconv.Itoa(i)})
+	}
+
+	// While pinned to the newest content at the bottom the indicator must not
+	// appear anywhere in the rendered view.
+	m.scroll = 0
+	view := m.View()
+	if strings.Contains(view.Content, "↑ ") {
+		t.Errorf("view shows scroll position while at bottom:\n%s", view.Content)
+	}
+
+	// While scrolled up, the indicator should be rendered into the input box's
+	// bottom line so the current line / total lines are visible next to where
+	// the user types.
+	m.scroll = 30
+	view = m.View()
+	want := "↑ " + strconv.Itoa(m.transcriptTop+1) + "/" + strconv.Itoa(m.transcriptTotal)
+	if !strings.Contains(view.Content, want) {
+		t.Errorf("view missing scroll position %q:\n%s", want, view.Content)
 	}
 }

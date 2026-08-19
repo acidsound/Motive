@@ -219,6 +219,9 @@ func (r *Runtime) Execute(ctx context.Context, request string) (string, error) {
 			obs.LastPredictedN = stats.ServerTimings.PredictedN
 		}
 		r.emit(TraceEvent{Kind: "model_end", Step: stepNumber, MaxSteps: budget.MaxSteps, MessageCount: len(messages), ToolCalls: len(msg.ToolCalls), TotalToolCalls: obs.TotalToolCalls, RequestBytes: stats.RequestBytes, EstimatedInputTokens: stats.EstimatedInputTokens, ResponseBytes: stats.ResponseBytes, Latency: stats.Latency, ServerTimings: stats.ServerTimings, ReasoningEffort: effort, TotalElapsed: time.Since(started)})
+		if msg.Role == "" {
+			msg.Role = "assistant"
+		}
 		messages = append(messages, msg)
 		if msg.Content != "" {
 			trace = append(trace, msg.Content)

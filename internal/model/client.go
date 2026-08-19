@@ -92,6 +92,7 @@ type StreamToolCallDelta struct {
 type streamChunk struct {
 	Choices []struct {
 		Delta struct {
+			Role             string                `json:"role"`
 			Content          string                `json:"content"`
 			ReasoningContent string                `json:"reasoning_content"`
 			ToolCalls        []streamToolCallDelta `json:"tool_calls"`
@@ -155,13 +156,15 @@ func NewFromEnv() *Client {
 	}
 }
 
-// normalizeEffort intentionally reflects the effort levels supported by the
-// current Motive/Qwen deployment contract. Provider-specific broader vocabularies
-// must not silently become Motive semantics.
+// normalizeEffort accepts the full standard reasoning-effort vocabulary and
+// passes recognized values straight through, letting the provider reject any
+// level it does not actually support. Only unknown or empty values fall back
+// to the Motive default of "low".
 func normalizeEffort(v string) string {
-	switch strings.ToLower(strings.TrimSpace(v)) {
-	case "low", "medium", "xhigh":
-		return strings.ToLower(strings.TrimSpace(v))
+	n := strings.ToLower(strings.TrimSpace(v))
+	switch n {
+	case "low", "medium", "high", "xhigh", "max":
+		return n
 	default:
 		return "low"
 	}
@@ -278,7 +281,11 @@ func (c *Client) ChatWithEffort(ctx context.Context, messages []Message, tools [
 		return Message{}, stats, fmt.Errorf("model returned no choices")
 	}
 	stats.ServerTimings = out.Timings
-	return out.Choices[0].Message, stats, nil
+	msg := out.Choices[0].Message
+	if msg.Role == "" {
+		msg.Role = "assistant"
+	}
+	return msg, stats, nil
 }
 
 // ChatStream is ChatWithEffort with incremental delivery. Each streamed chunk
@@ -339,7 +346,7 @@ func (c *Client) ChatStream(ctx context.Context, messages []Message, tools []Too
 }
 
 func (c *Client) consumeStream(body io.Reader, stats ChatStats, onDelta func(StreamDelta)) (Message, ChatStats, error) {
-	var msg Message
+	msg := Message{Role: "assistant"}
 	reader := bufio.NewReader(body)
 	first := true
 	for {
@@ -369,6 +376,9 @@ func (c *Client) consumeStream(body io.Reader, stats ChatStats, onDelta func(Str
 				return Message{}, stats, fmt.Errorf("model returned no choices")
 			}
 			out.Choices[0].Message.FinishReason = "stop"
+			if out.Choices[0].Message.Role == "" {
+				out.Choices[0].Message.Role = "assistant"
+			}
 			return out.Choices[0].Message, stats, nil
 		}
 		first = false
@@ -398,6 +408,9 @@ func (c *Client) consumeStream(body io.Reader, stats ChatStats, onDelta func(Str
 			continue
 		}
 		ch := chunk.Choices[0]
+		if ch.Delta.Role != "" {
+			msg.Role = ch.Delta.Role
+		}
 		var delta StreamDelta
 		if ch.Delta.ReasoningContent != "" {
 			msg.ReasoningContent += ch.Delta.ReasoningContent
