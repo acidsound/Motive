@@ -26,6 +26,16 @@ Motive communicates with an OpenAI-compatible `/v1/chat/completions` endpoint. *
 
 The current project goal is a practical execution environment in which the model can inspect, modify, verify, and revise a software workspace while Motive provides bounded execution and observation. **[DECISION]**
 
+### 2.1 Implementation is part of the evidence
+
+Motive is not merely a design described by documents. The executable Go implementation is the primary operational realization of the project's semantics. **[SOURCE][DECISION]**
+
+The stable-semantics document exists to make those semantics reconstructible across conversations and development sessions; it is not a substitute for source code, tests, or runtime observation. **[DECISION]**
+
+When documentation and implementation disagree, the disagreement must be resolved explicitly rather than silently assuming that the document is correct. **[DECISION]**
+
+Project insights should be promoted into stable semantics only when they can be tied to source, tests, observed behavior, or an explicit design decision. Otherwise they remain working hypotheses. **[DECISION]**
+
 ## 3. Context and persistence
 
 Each user request starts with a fresh model context. Motive must not depend on unseen chat history to execute a request. **[SOURCE][DECISION]**
@@ -256,6 +266,7 @@ Reasoning effort can be changed interactively rather than being restricted to an
 13. **Session persistence is transcript-only:** JSONL session files record what happened but do not restore model context; each execution still starts fresh. **[SOURCE][DECISION]**
 14. **Validated baseline:** formatting, tests, vetting, and diff checks are expected to remain green before advancing to the next semantic layer. **[TEST][DECISION]**
 15. **TUI is an operational interface:** TUI behavior is part of the practical user-facing runtime, not merely a demonstration layer. **[OBSERVED][DECISION]**
+16. **Implementation/documentation agreement is explicit:** the source implementation is the operational authority, while this document preserves the semantic contract and the evidence for it. **[SOURCE][DECISION]**
 
 ## 19. Explicitly unresolved semantics
 
@@ -296,3 +307,11 @@ A future change that alters a statement in this document must either:
 2. explicitly change the stable semantics and record that change as a project decision.
 
 The document must not silently convert planned behavior, model assumptions, or observations into stable semantics.
+
+## 22. Current project insight
+
+The project's recent development experience reinforces a distinction that should remain explicit: **self-improvement is not currently the primary measure of Motive's maturity**. The more important capability is a stable execution system whose behavior can be observed, reconstructed, verified, and deliberately changed. **[DECISION][OBSERVED]**
+
+Motive already implements its core operating model in code: model-directed reasoning, concrete tools, bounded execution, runtime observation, Git-aware state, and an operational TUI. The immediate objective is therefore to deepen the reliability and semantic clarity of that loop rather than to maximize autonomous self-rewriting. **[SOURCE][DECISION]**
+
+The stable-semantics document is part of the same experiment: Motive should be understandable and reproducible from durable project state rather than from accumulated conversational context. **[DECISION]**
