@@ -51,8 +51,11 @@ type ExecutionBudget struct {
 }
 
 type Observation struct {
+	Step              int
+	MaxSteps          int
+	ToolCalls         int
+	MaxToolCalls      int
 	ToolFailures      int
-	TotalToolCalls    int
 	LastToolFailure   bool
 	LastModelLatency  time.Duration
 	LastPredictedMS   float64
@@ -62,6 +65,51 @@ type Observation struct {
 	MaxContextTokens  int
 	ContextOverflow   bool
 	ServerPromptN     int
+	Elapsed           time.Duration
+	ReasoningEffort   string
+	BaseRevision      string
+	ResultRevision    string
+}
+
+// Format renders the observation as a compact, model-visible string.
+// It is deliberately short to minimize context cost while exposing
+// enough state for the model to recognize budget pressure, failures,
+// and context growth.
+func (o Observation) Format() string {
+	var b strings.Builder
+	b.WriteString("[execution-state]\n")
+	fmt.Fprintf(&b, "step=%d/%d tools=%d/%d failures=%d", o.Step, o.MaxSteps, o.ToolCalls, o.MaxToolCalls, o.ToolFailures)
+	if o.LastToolFailure {
+		b.WriteString(" last=FAIL")
+	}
+	b.WriteString("\n")
+	if o.MaxContextTokens > 0 {
+		fmt.Fprintf(&b, "context=%d/%d peak=%d", o.ContextTokens, o.MaxContextTokens, o.PeakContextTokens)
+		if o.ContextOverflow {
+			b.WriteString(" OVERFLOW")
+		}
+	} else {
+		fmt.Fprintf(&b, "context=%d peak=%d", o.ContextTokens, o.PeakContextTokens)
+	}
+	if o.ServerPromptN > 0 {
+		fmt.Fprintf(&b, " server_prompt_n=%d", o.ServerPromptN)
+	}
+	b.WriteString("\n")
+	fmt.Fprintf(&b, "elapsed=%s effort=%s", o.Elapsed.Round(time.Second), o.ReasoningEffort)
+	if o.ResultRevision != "" && o.ResultRevision != o.BaseRevision {
+		fmt.Fprintf(&b, " rev=%s→%s", shortRev(o.BaseRevision), shortRev(o.ResultRevision))
+	} else if o.BaseRevision != "" {
+		fmt.Fprintf(&b, " rev=%s", shortRev(o.BaseRevision))
+	}
+	b.WriteString("\n")
+	return b.String()
+}
+
+func shortRev(rev string) string {
+	if len(rev) > 8 {
+		return rev[:8]
+	}
+	return rev
 }
 
 // ContextAccounting measures model-context growth across an execution.
@@ -252,26 +300,26 @@ func (r *Runtime) Execute(ctx context.Context, request string) (string, error) {
 
 	for step := 0; step < budget.MaxSteps; step++ {
 		if err := ctx.Err(); err != nil {
-			r.emit(TraceEvent{Kind: "finish", Step: step, MaxSteps: budget.MaxSteps, TotalToolCalls: obs.TotalToolCalls, ContextTokens: ctxAcc.LastRequest, PeakContextTokens: ctxAcc.PeakRequest, MaxContextTokens: r.MaxContextTokens, ServerPromptN: ctxAcc.ServerPromptN, TotalElapsed: time.Since(started), ReasoningEffort: effort, BaseRevision: baseRevision, ResultRevision: r.WS.GitHEAD(), Error: err})
+			r.emit(TraceEvent{Kind: "finish", Step: step, MaxSteps: budget.MaxSteps, TotalToolCalls: obs.ToolCalls, ContextTokens: ctxAcc.LastRequest, PeakContextTokens: ctxAcc.PeakRequest, MaxContextTokens: r.MaxContextTokens, ServerPromptN: ctxAcc.ServerPromptN, TotalElapsed: time.Since(started), ReasoningEffort: effort, BaseRevision: baseRevision, ResultRevision: r.WS.GitHEAD(), Error: err})
 			return "", err
 		}
 
 		stepNumber := step + 1
 		ctxTokens = ctxAcc.Record(messages)
-		r.emit(TraceEvent{Kind: "model_start", Step: stepNumber, MaxSteps: budget.MaxSteps, MessageCount: len(messages), TotalToolCalls: obs.TotalToolCalls, ContextTokens: ctxTokens, PeakContextTokens: ctxAcc.PeakRequest, MaxContextTokens: r.MaxContextTokens, ReasoningEffort: effort, TotalElapsed: time.Since(started)})
+		r.emit(TraceEvent{Kind: "model_start", Step: stepNumber, MaxSteps: budget.MaxSteps, MessageCount: len(messages), TotalToolCalls: obs.ToolCalls, ContextTokens: ctxTokens, PeakContextTokens: ctxAcc.PeakRequest, MaxContextTokens: r.MaxContextTokens, ReasoningEffort: effort, TotalElapsed: time.Since(started)})
 		var msg model.Message
 		var stats model.ChatStats
 		var err error
 		if r.Stream {
 			msg, stats, err = r.Model.ChatStream(ctx, messages, toolDefs, effort, func(delta model.StreamDelta) {
-				r.emit(TraceEvent{Kind: "delta", Step: stepNumber, MaxSteps: budget.MaxSteps, MessageCount: len(messages), TotalToolCalls: obs.TotalToolCalls, ReasoningEffort: effort, TotalElapsed: time.Since(started), Text: delta.Content, Reasoning: delta.Reasoning})
+				r.emit(TraceEvent{Kind: "delta", Step: stepNumber, MaxSteps: budget.MaxSteps, MessageCount: len(messages), TotalToolCalls: obs.ToolCalls, ReasoningEffort: effort, TotalElapsed: time.Since(started), Text: delta.Content, Reasoning: delta.Reasoning})
 			})
 		} else {
 			msg, stats, err = r.Model.ChatWithEffort(ctx, messages, toolDefs, effort)
 		}
 		if err != nil {
-			r.emit(TraceEvent{Kind: "model_end", Step: stepNumber, MaxSteps: budget.MaxSteps, MessageCount: len(messages), TotalToolCalls: obs.TotalToolCalls, RequestBytes: stats.RequestBytes, EstimatedInputTokens: stats.EstimatedInputTokens, ResponseBytes: stats.ResponseBytes, Latency: stats.Latency, ServerTimings: stats.ServerTimings, ContextTokens: ctxTokens, PeakContextTokens: ctxAcc.PeakRequest, MaxContextTokens: r.MaxContextTokens, ServerPromptN: ctxAcc.ServerPromptN, ReasoningEffort: effort, TotalElapsed: time.Since(started), Error: err})
-			r.emit(TraceEvent{Kind: "finish", Step: stepNumber, MaxSteps: budget.MaxSteps, TotalToolCalls: obs.TotalToolCalls, ContextTokens: ctxAcc.LastRequest, PeakContextTokens: ctxAcc.PeakRequest, MaxContextTokens: r.MaxContextTokens, ServerPromptN: ctxAcc.ServerPromptN, TotalElapsed: time.Since(started), ReasoningEffort: effort, BaseRevision: baseRevision, ResultRevision: r.WS.GitHEAD(), Error: err})
+			r.emit(TraceEvent{Kind: "model_end", Step: stepNumber, MaxSteps: budget.MaxSteps, MessageCount: len(messages), TotalToolCalls: obs.ToolCalls, RequestBytes: stats.RequestBytes, EstimatedInputTokens: stats.EstimatedInputTokens, ResponseBytes: stats.ResponseBytes, Latency: stats.Latency, ServerTimings: stats.ServerTimings, ContextTokens: ctxTokens, PeakContextTokens: ctxAcc.PeakRequest, MaxContextTokens: r.MaxContextTokens, ServerPromptN: ctxAcc.ServerPromptN, ReasoningEffort: effort, TotalElapsed: time.Since(started), Error: err})
+			r.emit(TraceEvent{Kind: "finish", Step: stepNumber, MaxSteps: budget.MaxSteps, TotalToolCalls: obs.ToolCalls, ContextTokens: ctxAcc.LastRequest, PeakContextTokens: ctxAcc.PeakRequest, MaxContextTokens: r.MaxContextTokens, ServerPromptN: ctxAcc.ServerPromptN, TotalElapsed: time.Since(started), ReasoningEffort: effort, BaseRevision: baseRevision, ResultRevision: r.WS.GitHEAD(), Error: err})
 			return "", err
 		}
 		obs.LastModelLatency = stats.Latency
@@ -280,7 +328,7 @@ func (r *Runtime) Execute(ctx context.Context, request string) (string, error) {
 			obs.LastPredictedN = stats.ServerTimings.PredictedN
 			ctxAcc.ServerPromptN = stats.ServerTimings.PromptN
 		}
-		r.emit(TraceEvent{Kind: "model_end", Step: stepNumber, MaxSteps: budget.MaxSteps, MessageCount: len(messages), ToolCalls: len(msg.ToolCalls), TotalToolCalls: obs.TotalToolCalls, RequestBytes: stats.RequestBytes, EstimatedInputTokens: stats.EstimatedInputTokens, ResponseBytes: stats.ResponseBytes, Latency: stats.Latency, ServerTimings: stats.ServerTimings, ContextTokens: ctxTokens, PeakContextTokens: ctxAcc.PeakRequest, MaxContextTokens: r.MaxContextTokens, ServerPromptN: ctxAcc.ServerPromptN, ReasoningEffort: effort, TotalElapsed: time.Since(started)})
+		r.emit(TraceEvent{Kind: "model_end", Step: stepNumber, MaxSteps: budget.MaxSteps, MessageCount: len(messages), ToolCalls: len(msg.ToolCalls), TotalToolCalls: obs.ToolCalls, RequestBytes: stats.RequestBytes, EstimatedInputTokens: stats.EstimatedInputTokens, ResponseBytes: stats.ResponseBytes, Latency: stats.Latency, ServerTimings: stats.ServerTimings, ContextTokens: ctxTokens, PeakContextTokens: ctxAcc.PeakRequest, MaxContextTokens: r.MaxContextTokens, ServerPromptN: ctxAcc.ServerPromptN, ReasoningEffort: effort, TotalElapsed: time.Since(started)})
 		if msg.Role == "" {
 			msg.Role = "assistant"
 		}
@@ -291,18 +339,18 @@ func (r *Runtime) Execute(ctx context.Context, request string) (string, error) {
 		if len(msg.ToolCalls) == 0 {
 			if msg.Content == "" {
 				err := fmt.Errorf("model finished without a response")
-				r.emit(TraceEvent{Kind: "finish", Step: stepNumber, MaxSteps: budget.MaxSteps, TotalToolCalls: obs.TotalToolCalls, ContextTokens: ctxAcc.LastRequest, PeakContextTokens: ctxAcc.PeakRequest, MaxContextTokens: r.MaxContextTokens, ServerPromptN: ctxAcc.ServerPromptN, TotalElapsed: time.Since(started), ReasoningEffort: effort, BaseRevision: baseRevision, ResultRevision: r.WS.GitHEAD(), Error: err})
+				r.emit(TraceEvent{Kind: "finish", Step: stepNumber, MaxSteps: budget.MaxSteps, TotalToolCalls: obs.ToolCalls, ContextTokens: ctxAcc.LastRequest, PeakContextTokens: ctxAcc.PeakRequest, MaxContextTokens: r.MaxContextTokens, ServerPromptN: ctxAcc.ServerPromptN, TotalElapsed: time.Since(started), ReasoningEffort: effort, BaseRevision: baseRevision, ResultRevision: r.WS.GitHEAD(), Error: err})
 				return "", err
 			}
-			r.emit(TraceEvent{Kind: "finish", Step: stepNumber, MaxSteps: budget.MaxSteps, TotalToolCalls: obs.TotalToolCalls, ContextTokens: ctxAcc.LastRequest, PeakContextTokens: ctxAcc.PeakRequest, MaxContextTokens: r.MaxContextTokens, ServerPromptN: ctxAcc.ServerPromptN, TotalElapsed: time.Since(started), ReasoningEffort: effort, BaseRevision: baseRevision, ResultRevision: r.WS.GitHEAD()})
+			r.emit(TraceEvent{Kind: "finish", Step: stepNumber, MaxSteps: budget.MaxSteps, TotalToolCalls: obs.ToolCalls, ContextTokens: ctxAcc.LastRequest, PeakContextTokens: ctxAcc.PeakRequest, MaxContextTokens: r.MaxContextTokens, ServerPromptN: ctxAcc.ServerPromptN, TotalElapsed: time.Since(started), ReasoningEffort: effort, BaseRevision: baseRevision, ResultRevision: r.WS.GitHEAD()})
 			return strings.Join(trace, "\n\n"), nil
 		}
 
 		toolFailed := false
 		for _, call := range msg.ToolCalls {
-			if obs.TotalToolCalls >= budget.MaxToolCalls {
+			if obs.ToolCalls >= budget.MaxToolCalls {
 				err := fmt.Errorf("execution budget exceeded: %d tool calls", budget.MaxToolCalls)
-				r.emit(TraceEvent{Kind: "finish", Step: stepNumber, MaxSteps: budget.MaxSteps, TotalToolCalls: obs.TotalToolCalls, ContextTokens: ctxAcc.LastRequest, PeakContextTokens: ctxAcc.PeakRequest, MaxContextTokens: r.MaxContextTokens, ServerPromptN: ctxAcc.ServerPromptN, TotalElapsed: time.Since(started), ReasoningEffort: effort, BaseRevision: baseRevision, ResultRevision: r.WS.GitHEAD(), Error: err})
+				r.emit(TraceEvent{Kind: "finish", Step: stepNumber, MaxSteps: budget.MaxSteps, TotalToolCalls: obs.ToolCalls, ContextTokens: ctxAcc.LastRequest, PeakContextTokens: ctxAcc.PeakRequest, MaxContextTokens: r.MaxContextTokens, ServerPromptN: ctxAcc.ServerPromptN, TotalElapsed: time.Since(started), ReasoningEffort: effort, BaseRevision: baseRevision, ResultRevision: r.WS.GitHEAD(), Error: err})
 				return "", err
 			}
 			toolStarted := time.Now()
@@ -320,28 +368,38 @@ func (r *Runtime) Execute(ctx context.Context, request string) (string, error) {
 					toolFailed = true
 				}
 			}
-			obs.TotalToolCalls++
+			obs.ToolCalls++
 			if strings.HasPrefix(result, "ERROR: ") {
 				obs.ToolFailures++
 			}
-			r.emit(TraceEvent{Kind: "tool", Step: stepNumber, MaxSteps: budget.MaxSteps, ToolName: call.Function.Name, ToolCalls: 1, TotalToolCalls: obs.TotalToolCalls, ToolResultBytes: len(result), Latency: time.Since(toolStarted), TotalElapsed: time.Since(started), ReasoningEffort: effort})
+			r.emit(TraceEvent{Kind: "tool", Step: stepNumber, MaxSteps: budget.MaxSteps, ToolName: call.Function.Name, ToolCalls: 1, TotalToolCalls: obs.ToolCalls, ToolResultBytes: len(result), Latency: time.Since(toolStarted), TotalElapsed: time.Since(started), ReasoningEffort: effort})
 			messages = append(messages, model.Message{Role: "tool", ToolCallID: call.ID, Content: result})
 		}
 		obs.LastToolFailure = toolFailed
+		obs.Step = stepNumber
+		obs.MaxSteps = budget.MaxSteps
+		obs.MaxToolCalls = budget.MaxToolCalls
 		obs.ContextTokens = ctxAcc.LastRequest
 		obs.PeakContextTokens = ctxAcc.PeakRequest
 		obs.MaxContextTokens = r.MaxContextTokens
 		obs.ContextOverflow = ctxAcc.Overflow
 		obs.ServerPromptN = ctxAcc.ServerPromptN
+		obs.Elapsed = time.Since(started)
+		obs.ReasoningEffort = effort
+		obs.BaseRevision = baseRevision
+		obs.ResultRevision = r.WS.GitHEAD()
 
 		if toolFailed {
 			effort = "xhigh"
 		} else {
 			effort = r.Model.GetReasoningEffort()
 		}
+
+		// Append the runtime observation so the model can see execution state.
+		messages = append(messages, model.Message{Role: "user", Content: obs.Format()})
 	}
 
 	err := fmt.Errorf("execution budget exceeded: %d steps", budget.MaxSteps)
-	r.emit(TraceEvent{Kind: "finish", Step: budget.MaxSteps, MaxSteps: budget.MaxSteps, TotalToolCalls: obs.TotalToolCalls, ContextTokens: ctxAcc.LastRequest, PeakContextTokens: ctxAcc.PeakRequest, MaxContextTokens: r.MaxContextTokens, ServerPromptN: ctxAcc.ServerPromptN, TotalElapsed: time.Since(started), ReasoningEffort: effort, BaseRevision: baseRevision, ResultRevision: r.WS.GitHEAD(), Error: err})
+	r.emit(TraceEvent{Kind: "finish", Step: budget.MaxSteps, MaxSteps: budget.MaxSteps, TotalToolCalls: obs.ToolCalls, ContextTokens: ctxAcc.LastRequest, PeakContextTokens: ctxAcc.PeakRequest, MaxContextTokens: r.MaxContextTokens, ServerPromptN: ctxAcc.ServerPromptN, TotalElapsed: time.Since(started), ReasoningEffort: effort, BaseRevision: baseRevision, ResultRevision: r.WS.GitHEAD(), Error: err})
 	return "", err
 }

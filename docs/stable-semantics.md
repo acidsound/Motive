@@ -197,9 +197,11 @@ Telemetry is observational data. It does not by itself imply that Motive has lea
 
 ## 14. Self-observation
 
-Self-observation is a current runtime capability: after tool-bearing turns, Motive provides the model with a bounded, structured observation containing execution budget usage, tool failures, recent model latency/prediction timing, current reasoning effort, elapsed/remaining time, and Git revisions. **[SOURCE][DECISION]**
+Self-observation is a current runtime capability: after each tool-bearing turn, Motive appends a compact `[execution-state]` observation as a user message to the model context. The observation contains: step/max_steps, tool_calls/max_tool_calls, tool failure count and last-failure flag, context token estimate (with limit and peak when configured), server-reported prompt tokens when available, elapsed time, current reasoning effort, and Git revision state. **[SOURCE][TEST]**
 
-The observation is deliberately compact and does not include hidden chain-of-thought. It describes runtime state rather than exposing private reasoning content. **[DECISION]**
+The observation is deliberately compact (3–4 lines) and does not include hidden chain-of-thought. It describes runtime state rather than exposing private reasoning content. **[DECISION]**
+
+The observation is appended after tool results and before the next model request, so the model sees the current execution state at every decision point following tool use. It is not appended after the initial user request or after a final (non-tool) response. **[SOURCE][TEST]**
 
 The current observation mechanism is telemetry exposure, not autonomous anomaly detection. Reliable anomaly detection, scoring, and policy learning from these observations are **[UNKNOWN]**.
 
@@ -289,7 +291,7 @@ The project is no longer in the phase of establishing basic reasoning control, e
 
 The next work should proceed in this order:
 
-1. **Self-observation quality:** verify that the bounded telemetry exposed to the model is sufficient to recognize useful execution states and failures.
+1. **Self-observation quality:** ~~verify that the bounded telemetry exposed to the model is sufficient~~ — the observation is now implemented and appended to model context after tool-bearing turns. Remaining: verify in real executions that the model uses the observation to adjust behavior (e.g., recognizing budget pressure or context growth). **[SOURCE][TEST][DECISION]**
 2. **Anomaly detection:** define observable criteria for pathological executions such as excessive reasoning generation, repeated failed actions, budget pressure, or ineffective tool loops without exposing hidden chain-of-thought.
 3. **Recovery policy:** use those observations to make failure recovery explicit, bounded, and testable rather than relying only on the current one-turn `xhigh` escalation.
 4. **Self-modification boundary:** determine which classes of Motive/workspace changes the model may safely perform autonomously and which require explicit user direction or verification.
