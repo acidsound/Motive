@@ -208,3 +208,23 @@ func TestResponseHeaderTimeoutProtectsAgainstHungServer(t *testing.T) {
 	}
 	t.Logf("hung server detected in %v via ResponseHeaderTimeout", elapsed)
 }
+
+// TestNewHTTPClientHasNoTotalTimeout verifies the shared client factory that
+// both NewFromEnv and the production entrypoint must use. It must not set a
+// total http.Client.Timeout (the runtime/request context deadline is the sole
+// lifetime authority) while still keeping ResponseHeaderTimeout for hung-server
+// protection. Because production wiring now builds the client from this exact
+// factory, this test guards the production path, not just NewFromEnv.
+func TestNewHTTPClientHasNoTotalTimeout(t *testing.T) {
+	c := NewHTTPClient()
+	if c.Timeout != 0 {
+		t.Fatalf("NewHTTPClient().Timeout = %v, want 0 (context deadline is the sole authority)", c.Timeout)
+	}
+	tr, ok := c.Transport.(*http.Transport)
+	if !ok {
+		t.Fatalf("expected *http.Transport, got %T", c.Transport)
+	}
+	if tr.ResponseHeaderTimeout <= 0 {
+		t.Fatal("NewHTTPClient().Transport.ResponseHeaderTimeout not set; hung servers would block until context deadline")
+	}
+}

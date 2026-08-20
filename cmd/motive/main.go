@@ -4,7 +4,6 @@ import (
 	"context"
 	"flag"
 	"fmt"
-	"net/http"
 	"os"
 	"strings"
 	"time"
@@ -16,8 +15,20 @@ import (
 	"github.com/acidsound/Motive/internal/tui"
 )
 
-func newHTTPClient() *http.Client {
-	return &http.Client{Timeout: 10 * time.Minute}
+// newModelClient builds the production model client from resolved config.
+// The shared model.NewHTTPClient() factory (no total http.Client.Timeout) is
+// used so the runtime/request context deadline remains the sole lifetime
+// authority for streaming responses, matching the test-protected policy.
+func newModelClient(cfg *config.Config) *model.Client {
+	return &model.Client{
+		BaseURL:         strings.TrimRight(cfg.Default.BaseURL, "/"),
+		Model:           cfg.Default.Model,
+		APIKey:          cfg.Default.APIKey,
+		Temperature:     envFloat("MOTIVE_TEMPERATURE", 0.6),
+		MaxTokens:       envInt("MOTIVE_MAX_TOKENS", 0),
+		ReasoningEffort: cfg.Default.ReasoningEffort,
+		HTTP:            model.NewHTTPClient(),
+	}
 }
 
 func main() {
@@ -37,15 +48,7 @@ func main() {
 		os.Exit(1)
 	}
 
-	client := &model.Client{
-		BaseURL:         strings.TrimRight(cfg.Default.BaseURL, "/"),
-		Model:           cfg.Default.Model,
-		APIKey:          cfg.Default.APIKey,
-		Temperature:     envFloat("MOTIVE_TEMPERATURE", 0.6),
-		MaxTokens:       envInt("MOTIVE_MAX_TOKENS", 0),
-		ReasoningEffort: cfg.Default.ReasoningEffort,
-		HTTP:            newHTTPClient(),
-	}
+	client := newModelClient(cfg)
 
 	rt := runtime.New(client)
 	if *verbose {

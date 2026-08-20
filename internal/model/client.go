@@ -144,6 +144,27 @@ type Client struct {
 	HTTP            *http.Client
 }
 
+// NewHTTPClient returns the shared default HTTP client for model requests.
+//
+// It deliberately sets no total http.Client.Timeout. The runtime/request
+// context deadline is the sole authority for the full lifetime of a request,
+// including long streaming (reasoning) responses. A total client timeout would
+// kill a valid stream that is still within the execution budget. For
+// hung-server protection, ResponseHeaderTimeout is kept: a server that accepts
+// the connection but never sends response headers fails fast instead of
+// waiting for the context deadline to elapse.
+//
+// Both NewFromEnv and the production entrypoint must use this factory so the
+// timeout authority never diverges between the test-protected policy and the
+// actual production execution path.
+func NewHTTPClient() *http.Client {
+	return &http.Client{
+		Transport: &http.Transport{
+			ResponseHeaderTimeout: 30 * time.Second,
+		},
+	}
+}
+
 func NewFromEnv() *Client {
 	return &Client{
 		BaseURL:         strings.TrimRight(env("MOTIVE_BASE_URL", env("OPENAI_BASE_URL", "http://127.0.0.1:8080/v1")), "/"),
@@ -152,11 +173,7 @@ func NewFromEnv() *Client {
 		Temperature:     envFloat("MOTIVE_TEMPERATURE", envFloat("OPENAI_TEMPERATURE", 0.6)),
 		MaxTokens:       envInt("MOTIVE_MAX_TOKENS", envInt("OPENAI_MAX_TOKENS", 0)),
 		ReasoningEffort: normalizeEffort(env("MOTIVE_REASONING_EFFORT", "low")),
-		HTTP: &http.Client{
-			Transport: &http.Transport{
-				ResponseHeaderTimeout: 30 * time.Second,
-			},
-		},
+		HTTP:            NewHTTPClient(),
 	}
 }
 
