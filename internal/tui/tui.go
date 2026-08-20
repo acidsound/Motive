@@ -1187,9 +1187,9 @@ func buildHelpLines(k Keymap) []string {
 		desc string
 	}
 	rows := []row{
-		{string(k.Run), "Send (busy: steer/queue)"},
-		{string(k.CycleQueueMode), "Cycle steer/queue (busy)"},
-		{string(k.Stop), "Stop run (busy) / close help"},
+		{string(k.Run), "Send"},
+		{string(k.CycleQueueMode), "Cycle steer/queue"},
+		{string(k.Stop), "Stop"},
 		{string(k.Newline), "Insert newline"},
 		{string(k.CycleEffort), "Cycle effort"},
 		{string(k.SessionPicker), "Session picker"},
