@@ -14,6 +14,7 @@ import (
 	"github.com/acidsound/Motive/internal/config"
 	"github.com/acidsound/Motive/internal/runtime"
 	"github.com/acidsound/Motive/internal/session"
+	"github.com/charmbracelet/x/ansi"
 )
 
 const (
@@ -124,10 +125,41 @@ type model struct {
 
 const maxInputHeight = 10
 
+// visualLineCount returns the total number of terminal rows the current input
+// occupies once each logical line is soft-wrapped at the textarea's width. The
+// textarea reports logical lines via LineCount() — a single long line that
+// wraps into several rows would otherwise keep the input box one row tall and
+// hide the wrapped content and the cursor.
+func (m model) visualLineCount() int {
+	width := m.input.Width()
+	if width < 1 {
+		width = 1
+	}
+	total := 0
+	for _, line := range strings.Split(m.input.Value(), "\n") {
+		if line == "" {
+			total++
+			continue
+		}
+		// Match the textarea's wrapping: word-wrap, then hard-wrap, then
+		// count the resulting lines.  This keeps the input box height
+		// consistent with how the textarea actually renders.
+		wrapped := ansi.Wordwrap(line, width, "")
+		wrapped = ansi.Hardwrap(wrapped, width, true)
+		total += strings.Count(wrapped, "\n") + 1
+	}
+	if total < 1 {
+		total = 1
+	}
+	return total
+}
+
 func (m *model) syncInputHeight() {
-	lines := m.input.LineCount()
-	if lines < 1 {
-		lines = 1
+	// Use the soft-wrapped (visual) line count so a single long line that
+	// wraps across several terminal rows expands the input box accordingly.
+	visLines := m.visualLineCount()
+	if visLines < 1 {
+		visLines = 1
 	}
 	maxH := maxInputHeight
 	if m.height > 0 {
@@ -140,7 +172,7 @@ func (m *model) syncInputHeight() {
 			maxH = availForInput
 		}
 	}
-	h := min(lines, maxH)
+	h := min(visLines, maxH)
 	if h < 1 {
 		h = 1
 	}
@@ -150,6 +182,7 @@ func (m *model) syncInputHeight() {
 	// Ensure the viewport scroll position stays optimal:
 	// When height expands, textarea's viewport offset may remain scrolled down
 	// even though all lines fit, hiding earlier lines (like line 0 and '>').
+	lines := m.input.LineCount()
 	if m.input.ScrollYOffset() > 0 {
 		if lines <= h || lines-m.input.ScrollYOffset() < h {
 			savedLine := m.input.Line()

@@ -254,6 +254,66 @@ func TestDynamicInputHeightMaxClamped(t *testing.T) {
 	}
 }
 
+func TestVisualLineCountWrapsLongLine(t *testing.T) {
+	m := newTestModel()
+	m.width = 30
+	m.height = 30
+	m.input.SetWidth(m.width)
+
+	// A short line stays one visual row.
+	m.input.SetValue("hi")
+	if got := m.visualLineCount(); got != 1 {
+		t.Errorf("visualLineCount for short line = %d, want 1", got)
+	}
+
+	// A line longer than the input width wraps into multiple rows. With the
+	// 2-column prompt the editable width is 28, so 80 characters fill 3 rows.
+	m.input.SetValue(strings.Repeat("a", 80))
+	if got := m.visualLineCount(); got != 3 {
+		t.Errorf("visualLineCount for 80 chars at width 30 = %d, want 3", got)
+	}
+
+	// Empty input counts as a single row so the prompt line stays visible.
+	m.input.SetValue("")
+	if got := m.visualLineCount(); got != 1 {
+		t.Errorf("visualLineCount for empty input = %d, want 1", got)
+	}
+}
+
+func TestLongLineExpandsInputHeight(t *testing.T) {
+	m := newTestModel()
+	m.width = 30
+	m.height = 30
+	m.input.SetWidth(m.width)
+	m.syncInputHeight()
+	if m.inputH != 1 {
+		t.Fatalf("initial inputH = %d, want 1", m.inputH)
+	}
+
+	// Typing past the terminal width must soft-wrap and grow the input box so
+	// the wrapped content (and the cursor) stay visible.
+	for _, ch := range strings.Repeat("a", 80) {
+		m.input, _ = m.input.Update(tea.KeyPressMsg{Text: string(ch)})
+	}
+	m.syncInputHeight()
+	if m.inputH != 3 {
+		t.Errorf("inputH after 80 chars at width 30 = %d, want 3", m.inputH)
+	}
+
+	// The textarea view must actually render the wrapped rows (more than the
+	// single-row box we had before the fix).
+	if view := m.input.View(); strings.Count(view, "\n") < 2 {
+		t.Errorf("input view should span multiple wrapped rows, got %q", view)
+	}
+
+	// Clearing the input must shrink the box back to a single row.
+	m.input.SetValue("")
+	m.syncInputHeight()
+	if m.inputH != 1 {
+		t.Errorf("inputH after clearing = %d, want 1", m.inputH)
+	}
+}
+
 func TestDynamicInputHeightShrinkOnSubmit(t *testing.T) {
 	m := newTestModel()
 	m.width = 80
