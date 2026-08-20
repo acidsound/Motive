@@ -4,6 +4,13 @@
 > `docs/model-delegated-decomposition.md` onto the *actual* Motive source structure.
 > It is not yet realized in code, and must not be treated as stable semantics until
 > implemented and verified (see `stable-semantics.md` §1 classification rules).
+>
+> **This document is the Form 1 concretization** (`execute_unit` tool, `decomposition.md`
+> §6). Per the current agreement, **Form 0/1 is not yet selected**: Form 1 is justified
+> only if at least one of the four conditions in `decomposition.md` §6 is demonstrated
+> in a real run. Until then this mapping is a candidate, not a commitment. The
+> form-agnostic minimum evidence (Git delta + `brief.md` + boundary status) lives in
+> `decomposition.md` §4 and applies to both forms.
 
 ## 1. The concrete problem
 
@@ -31,8 +38,10 @@ This is preserved structurally, not just by convention:
   rule in `runtime.go` (`if len(msg.ToolCalls) == 0 { return ... }`). The runtime never
   declares "EPIC finished".
 - **Task-level correctness** (did the unit satisfy its exit criteria) is judged by the
-  model: the unit writes its own `result.md` with a `done|blocked` status, and the
-  parent re-judges at recomposition.
+  model: the parent **re-judges** from `brief.md` + the Git delta in a fresh context at
+  recomposition (per `decomposition.md` §4.1). The unit does not pre-answer this in a
+  required `result.md`; a `result.md` note is written only for forward intent the diff
+  cannot express.
 - **What the runtime *does* judge is mechanical and boundary-local only**: budget
   exceeded, tool failures, revision delta, clean loop exit. These are facts the model
   cannot see for itself from outside a discarded context.
@@ -42,9 +51,10 @@ This is preserved structurally, not just by convention:
 ```
 EPIC intake ──► unit selection ──► Execute(unit) ──► verify ──► persist ──► boundary ──► next unit
    runtime        model                model/runtime   mixed      model+runtime  runtime      model
-   (record)       (write brief +       (fresh context) (see §5)   (result.md +   (discard,     (read result.md,
-                   call execute_unit)                              boundary record) return summary)  rewrite plan.md,
-                                                                                                  write next brief)
+   (record)       (write brief +       (fresh context) (see §5)   (boundary rec + (discard,     (read status +
+                   call execute_unit)                              optional note)   return summary)  diff, rewrite
+                                                                                                  plan.md, write
+                                                                                                  next brief)
 ```
 
 The parent's own budgeted loop only ever performs *cheap* steps: write a brief →
@@ -60,8 +70,8 @@ one `Execute()` stops being the single consumer of the 32-step budget.
 | **2. Unit selection** | **model** | `motive.tasks/NNNN/brief.md` (+ `plan.md` rewrite) | brief content + shared git workspace | new tool `execute_unit` |
 | **3. Execute (unit)** | **model** decides actions; runtime runs the loop | workspace files the unit writes; unit's final response | nothing direct; durable state lands in workspace | extract reusable bounded loop |
 | **4. Verify** | runtime = mechanical; **model** = task-level | boundary check result (revisions, budget usage, status) | status + `base_rev → result_rev` + failure count | new `unitResult` capture |
-| **5. Persist evidence** | model writes `result.md`; runtime writes boundary record | `result.md` (model, semantic) + boundary `Entry` (runtime, mechanical) | paths to the artifacts | session `Store.Append` reuse |
-| **6. Execution boundary** | runtime discards unit context, returns compact summary | tool-result message in parent context | unit id, revision delta, status, budget used, `result.md` path | `execute_unit` returns summary string |
+| **5. Persist evidence** | runtime writes boundary record; model *optionally* writes `result.md` | boundary `Entry` (runtime, mechanical — **primary**) + `result.md` (model, optional forward intent, gitignored) | boundary status + rev delta (+ note path if present) | session `Store.Append` reuse |
+| **6. Execution boundary** | runtime discards unit context, returns compact summary | tool-result message in parent context | unit id, revision delta, status, budget used, note path (if present) | `execute_unit` returns summary string |
 | **7. Next unit reconstruction** | **model** | `plan.md` rewrite + next `brief.md` | `brief.md` + git workspace (durable medium, not parent context) | none (all tool ops exist) |
 
 ## 5. Verify — the only stage where judgment is split
@@ -74,8 +84,11 @@ Verification must not become hidden runtime judgment. Split it explicitly:
   records per turn; the boundary record is the same data collapsed to one line.
 - **Model (semantic, delegated):** did the unit meet the exit criteria written in its
   `brief.md`? Is the resulting workspace coherent with the plan? Runtime never reads
-  these judgments — the unit writes its own `result.md` (`done|blocked`), and the
-  parent re-reads it at recomposition.
+  these judgments. Per `decomposition.md` §4.1, the unit does **not** pre-answer them
+  in a required `result.md`: the parent **re-judges** from `brief.md` + the Git delta
+  in a fresh context, which is more trustworthy than a stale self-evaluation. A
+  `result.md` note is written only for forward intent the diff cannot express, and is
+  gitignored (temporary artifact outside the project configuration).
 
 The boundary is where a *wrong* split surfaces (per `decomposition.md` §5): an
 over-sized unit comes back `budget-exceeded`, a mis-scoped unit comes back `blocked`,
@@ -158,13 +171,13 @@ The returned summary (stage 6) is deliberately small, e.g.:
 [unit-boundary]
 id=0003 brief=motive.tasks/0003/brief.md status=completed
 rev=abc1234→def5678 steps=24/32 tools=61/128 failures=0
-result=motive.tasks/0003/result.md
+note=motive.tasks/0003/result.md   # optional; present only if the unit left forward intent
 ```
 
 ### 6.4 Persist the boundary record (`session.go` reuse)
 
 The unit boundary is an *immutable, runtime-written* fact that Git records alongside the
-model's own `result.md`. `session.Entry` already has `Role`, `Content`, `BaseRevision`,
+model's optional `result.md` note (if any). `session.Entry` already has `Role`, `Content`, `BaseRevision`,
 `ResultRevision`, `ElapsedMS`, and `Tools` — sufficient. Append one entry with
 `Role: "unit"` and `Content` = JSON of `unitResult` + brief path. **No schema change in
 `session.go` is required**; if we later want to distinguish unit boundaries from turn

@@ -69,33 +69,69 @@ must not be treated as the main line.
 
 ## 4. The task artifact protocol (working proposal)
 
-A minimal, model-written format. Three kinds of files, all ordinary workspace files
-so Git is the revision record:
+The protocol's job is to leave **minimum execution evidence** so a fresh,
+discarded-context execution can reconstitute what a unit did — without replaying the
+unit's context. With Workspace + Git as the primary state, that minimum evidence is:
+
+1. **Git revision delta (`base_rev → result_rev`) + the workspace files at
+   `result_rev`** — the primary, durable record of what actually changed. Already
+   recorded on every termination path (clean, budget, error, cancel).
+2. **`brief.md`** — the unit's input contract: what it was supposed to do.
+3. **Boundary status** — `completed | budget-exceeded | error` + the consumed budget
+   (steps / tool calls / failures). The one fact a model outside the discarded context
+   cannot re-derive on its own.
+
+Everything else — "was the exit criterion met?", "what remains?" — is **re-judged** by
+the next fresh execution reading `brief.md` + the diff. A fresh re-judgment is more
+trustworthy than a stale self-evaluation left inside a discarded context, so the
+protocol does not require the unit to pre-answer these.
+
+The only thing the protocol adds on top of what already exists is the **structured
+boundary status** (§6). Today `Runtime.Execute` returns only `(string, error)`: the
+revision delta and step count are unstructured, so a parent would have to re-run `git`
+and re-read the session. The structured `unitResult` (status + base→result rev + steps
++ failures) is the single addition. Git delta and the workspace are already there.
+
+### 4.1 `result.md` — reconsidered, no longer the output contract
+
+The original draft made `result.md` the unit's output contract. Re-examined against the
+minimum evidence above, **it is not needed for reconstitution**: Git delta + brief +
+boundary status suffice (§4). The one case where a model-written note is still
+justified is **forward intent that the diff cannot express** — e.g. "the brief's API
+assumption differs from reality; the next unit should re-scope around X." Only then
+does `result.md` exist, as a model note, not as a required output.
+
+If kept, it is a **temporary artifact outside the project configuration**: it lives in
+the workspace (the next execution must read it, and it must survive between executions)
+but is **gitignored**, so it stays out of the revision history. The project
+configuration is the actual code/doc change — exactly what the Git delta captures.
+`plan.md` and `brief.md` are the same kind of coordination scaffolding (control plane,
+not deliverable) and are gitignored for the same reason.
 
 ```
-motive.tasks/
+motive.tasks/            # gitignored coordination scaffolding
   plan.md                 # decomposition: subtasks, dependency order, composition instructions
   0001/
-    brief.md              # goal, scope, inputs, expected output path, exit criteria, budget hint
-    result.md             # done|blocked, what changed, what remains, base→result revisions
+    brief.md              # goal, scope, inputs, exit criteria, budget hint
+    result.md             # optional: forward-intent note only (see §4.1)
   0002/
     brief.md
-    result.md
   ...
 ```
 
 - `brief.md` is the input contract for one fresh bounded execution.
-- `result.md` is the output contract: a compact, structured summary that a later
-  execution can read without replaying the sub-execution's context.
-- `plan.md` is owned by the model and may be rewritten as sub-executions report back
-  (blocked pieces get re-scoped or split further).
+- `result.md` is **optional** and exists only for forward intent the diff cannot carry.
+- `plan.md` is owned by the model and may be rewritten as units report back (blocked
+  pieces get re-scoped or split further).
+- The durable, load-bearing record is the **Git delta + boundary status**, not these
+  files.
 
 ## 5. Decomposition is fallible — the recovery loop is the design
 
 The single most error-prone step is the split itself. The model can misjudge:
 
 - **the dependency structure** — two "independent" subtasks actually share state, so
-  their `result.md` files do not compose into a coherent whole;
+  their Git deltas do not compose into a coherent whole;
 - **the size** — a "subtask" still exceeds one execution budget, i.e. it was not
   decomposed far enough;
 - **the task itself** — the plan targets the wrong goal, so subtasks are correct but
@@ -107,10 +143,10 @@ eliminated**. The design's job is to make a wrong split *cheap to detect and che
 recover from*, which reduces to three properties:
 
 1. **A wrong split surfaces as a boundary event, never as silent corruption.**
-   Errors appear as either (a) a `blocked` or over-budget `result.md`, or (b) an
-   uncomposable set of `result.md` files at recomposition time. Both are observable at
-   an execution boundary, so the next execution can react. This is the same mechanism
-   as §3.4 — recomposition is where decomposition fallibility is caught.
+   Errors appear as either (a) a `budget-exceeded` or `error` boundary status, or (b)
+   an uncomposable set of Git deltas at recomposition time. Both are observable at an
+   execution boundary, so the next execution can react. This is the same mechanism as
+   §3.4 — recomposition is where decomposition fallibility is caught.
 
 2. **`plan.md` is explicitly a hypothesis, not a contract.** Its first version is
    expected to be partly wrong. It exists to be rewritten as sub-executions report
@@ -130,25 +166,82 @@ The consequence for §7's proof requirements: the protocol is not demonstrated b
 the boundary and repaired by a replan*, because that is the case the design actually
 solves for.
 
+### 5.1 Termination modes and the recovery ladder
+
+A unit terminates in exactly three ways, and each leaves a different durable trace:
+
+| Termination | Durable evidence left | What the next execution reads |
+|---|---|---|
+| **completed** | Git delta (full) + brief + boundary status (+ optional `result.md` note) | brief + `git diff base..HEAD` → re-judge exit criteria; read the note if present |
+| **budget-exceeded** | Git delta (partial) + brief + boundary status | re-scoped `plan.md` + brief + `git diff base..HEAD` + status → re-scope / continue |
+| **error / crash** (model or network failure mid-unit) | Git delta (durable work before the crash) + in-progress assistant content (error-path persistence) + brief + boundary status | transcript (in-progress reasoning) + `git diff base..HEAD` + brief → resume from the interruption point |
+
+The **crash-with-no-result** case is a first-class failure mode, not an edge case: a
+unit that dies mid-turn leaves no `result.md` at all. Its recovery path is to read the
+unit's transcript (the in-progress turns, persisted on the error path), re-scope the
+brief from what the transcript shows was already done, and redistribute. This completes
+§5's claim that "the recovery loop is the design": every way a unit can fail now has a
+named, low-cost recovery.
+
+The **recovery ladder** is the ordered set of channels a parent reads to reconstitute a
+unit — richest intent first, noisiest last:
+
+1. **`result.md`** (model-written, semantic) — exists only on clean completion.
+2. **Boundary record** (runtime-written, mechanical: status, rev delta, budget,
+   failures) — exists on *every* return, including budget-exceeded.
+3. **Transcript** (the unit's actual turns) — exists on *every* execution including
+   crashes; richest but noisiest.
+
+The parent reads `result.md` → (if absent) the boundary record → (if status=error) the
+transcript. **Honesty caveat (code-verified):** the third rung is only as good as its
+plumbing. Today the error-path persistence of in-progress work lives in the TUI
+(`tui.go finishTurn`), not the runtime path, and the one-shot CLI path creates no
+session at all — so a unit with no session of its own leaves **zero** recoverable
+records on a crash. The transcript rung is a design target that depends on the unit
+running in its own session with error-persistence lowered into the runtime path; it is
+not yet a fact for sub-executions.
+
 ## 6. The missing primitive (deliberately minimal)
 
 Everything above works with today's tools *except* one thing: there is no way for one
-execution to start a fresh bounded execution on a subtask and receive its result. Two
-candidate forms, smallest first:
+execution to start a fresh bounded execution on a subtask and receive a *structured*
+result. Two candidate forms:
 
 - **Form 0 — zero runtime change (pure model behavior):** the model writes a
   `brief.md`, then invokes the runtime on it through the existing `shell` tool, e.g.
-  `motive run "<subtask brief>"`. The sub-execution's output and `result.md` land in
-  workspace files. Decomposition, fan-out, and recomposition are entirely model
-  choices. Motive's runtime stays exactly as it is.
-- **Form 1 — one thin first-class tool:** add a single `execute_task` tool that runs a
-  fresh bounded execution against a `brief.md` and returns a compact summary. This is a
-  generic re-entrancy primitive, not a planner layer, and does not violate the
-  no-sub-agent invariant in spirit because the model still owns all decomposition.
+  `motive run "<subtask brief>"`. Code-verified: the one-shot CLI path creates **no
+  session and appends no boundary record** — the parent receives only stdout (clean
+  text) / stderr (error string) plus whatever the unit wrote to files. Status is
+  string-parsed, the rev delta requires the parent to re-run `git`, and any in-progress
+  reasoning is lost unless the unit wrote it to a file.
+- **Form 1 — one thin first-class tool:** add a single `execute_unit` tool that runs a
+  fresh bounded execution against a `brief.md` in **its own session** and returns a
+  structured `unitResult` (status + base→result rev + steps + failures) in-band, with a
+  boundary entry visible in the parent's `session_log`. This is a generic re-entrancy
+  primitive, not a planner layer, and does not violate the no-sub-agent invariant in
+  spirit because the model still owns all decomposition.
 
-Form 0 should be tried first: it proves the protocol with zero runtime change and
-keeps Motive's execution path untouched. Form 1 is only justified if Form 0 is shown
-to be materially worse (e.g. sub-execution telemetry is lost through the shell).
+**Form 0/1 is not yet selected.** Form 1 is justified only if **at least one** of the
+following is demonstrated in a real run (this concretizes the old "materially worse"
+test against the actual code):
+
+1. **Lossy status channel** — shell strings alone cannot reliably distinguish
+   `completed` / `budget-exceeded` / `model-error`, and reconstitution depends on that
+   distinction.
+2. **In-context rev delta absence** — the parent needs the unit's base→result delta as
+   a structured value in its own context, and re-running `git` per unit is
+   cost/noise-prohibitive.
+3. **Forward intent loss on failure** — an error/budget unit leaves intent that is
+   (a) not in the diff, (b) not in a file, and (c) not recoverable (the CLI path uses
+   no session, so the transcript is gone). The re-derivation cost is material. This is
+   the sharpest condition: a hard fact, not a soft judgment.
+4. **Telemetry continuity** — unit boundaries must be visible in the parent's
+   session/telemetry for self-observation (`stable-semantics.md` §20.1), and a
+   subprocess is invisible to the parent's `session_log`.
+
+If **none** of these is demonstrated in a real run, **Form 0 is sufficient** and Form 1
+is not justified. No new principle is introduced — this is the "materially worse" test
+made concrete.
 
 ## 7. What must become stable semantics (only after proof)
 
@@ -161,12 +254,47 @@ must be exercised:
   with the parent producing a valid final result;
 - **at least one deliberately wrong split** (bad dependency cut or over-sized subtask)
   that surfaces at the boundary and is repaired by a `plan.md` rewrite — see §5;
-- verification that sub-execution results compose from `result.md` files without
-  replaying any sub-execution's context.
+- verification that sub-execution results compose from the Git delta + `brief.md` +
+  boundary status (the minimum evidence, §4) without replaying any sub-execution's
+  context.
 
 Until then, the decomposition protocol in §4, the fallibility handling in §5, and the
 primitive in §6 remain **[UNKNOWN]** / working hypothesis, consistent with the
 classification rules in `stable-semantics.md` §1.
+
+### 7.1 The smallest real EPIC scenario (verification target)
+
+In this repository (Motive): **add a bounded, workspace-scoped `git log` tool + unit
+tests.** It is real work (no `git log` tool exists today), decomposes naturally into
+reconnaissance → implementation, and the implementation unit can be scoped small enough
+to make a budget-exceeded deterministic. Not circular.
+
+- **0001 (reconnaissance, read-only, small budget):** inspect the existing
+  `git_status`/`git_diff` implementation pattern (workspace method signature, tool
+  case, `Definitions` entry) and record 0002's implementation contract in
+  `motive.tasks/0001/brief.md`. Completes within budget.
+- **0002 (implementation, deliberately over-scoped):** `Workspace.GitLog(n)` + the
+  `git log` tool case + `Definitions` entry + test. True cost is ~8–12 steps, but set
+  `budget_hint(max_steps=6)` below that → **deterministic budget-exceeded** = an
+  over-sized subtask (wrong split) surfacing at the boundary.
+- **0003 (recomposition):** read 0002's evidence, re-scope, and complete.
+
+**The evidence chain 0003 (fresh context) reads to reconstitute:**
+
+1. `plan.md` — the parent's re-scoped plan, rewritten after 0002 reported
+   budget-exceeded.
+2. `motive.tasks/0002/brief.md` — the original contract.
+3. `git diff <0002.base_rev>..<HEAD>` — **primary**: how far 0002 got (e.g. `GitLog`
+   exists in workspace.go but the tool case/test do not). 0003 reads the diff, not the
+   discarded context.
+4. **Boundary status** — `budget-exceeded, steps=6/6, base→result rev`. Form 0: shell
+   exit code + stderr string. Form 1: structured `unitResult`. Both tell 0003 "it did
+   not finish."
+5. **Workspace files at HEAD** — the actual partial state.
+
+From (1)–(5), 0003 re-judges "0002 got as far as the workspace method; the case/test
+are missing; finish the rest" and reconstitutes from durable state (Git delta + brief +
+status) without replaying 0002's context — the core of the protocol.
 
 ## 8. Explicitly out of scope (to keep the discussion on axis)
 
