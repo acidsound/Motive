@@ -81,6 +81,22 @@ func (s *Store) Append(id string, e Entry) error {
 	return enc.Encode(e)
 }
 
+// Tail returns the last n entries of a session transcript, in chronological
+// order. n is clamped to the number of available entries.
+func (s *Store) Tail(id string, n int) ([]Entry, error) {
+	entries, err := s.Load(id)
+	if err != nil {
+		return nil, err
+	}
+	if n <= 0 {
+		n = 1
+	}
+	if n > len(entries) {
+		n = len(entries)
+	}
+	return entries[len(entries)-n:], nil
+}
+
 // List returns sessions newest first.
 func (s *Store) List() ([]Summary, error) {
 	entries, err := os.ReadDir(s.Dir)
@@ -181,6 +197,25 @@ func (s *Store) Load(id string) ([]Entry, error) {
 		out = append(out, e)
 	}
 	return out, sc.Err()
+}
+
+// FormatEntry renders a single transcript entry as a compact, model-visible
+// line. Content is truncated so a tail of many entries stays small.
+func FormatEntry(e Entry) string {
+	content := firstLine(e.Content)
+	if e.Role == "assistant" && len(e.Tools) > 0 {
+		tools := strings.Join(e.Tools, ", ")
+		if content == "" {
+			content = "[" + tools + "]"
+		} else {
+			content += " [" + tools + "]"
+		}
+	}
+	ts := ""
+	if !e.TS.IsZero() {
+		ts = e.TS.UTC().Format("2006-01-02 15:04:05")
+	}
+	return fmt.Sprintf("%s %s: %s", ts, e.Role, content)
 }
 
 func firstLine(s string) string {

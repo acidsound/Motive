@@ -166,6 +166,15 @@ type Runtime struct {
 	Budget           ExecutionBudget
 	Trace            func(TraceEvent)
 	Stream           bool
+	// SessionID is the active session identifier, included in the model context
+	// each turn so the model knows where its transcript is persisted. It is set
+	// by the TUI before execution and is empty for one-shot CLI runs.
+	SessionID string
+	// SessionLog is injected so the session_log tool can read the tail of the
+	// current session's .jsonl transcript. It lets a run that was interrupted by
+	// a failure look at what happened last and continue instead of restarting.
+	// When nil, the session_log tool reports that no log is available.
+	SessionLog func(sessionID string, lines int) (string, error)
 }
 
 const (
@@ -241,6 +250,11 @@ func (r *Runtime) ContextBlock() string {
 		b.WriteString("\nWorkspace files:\n")
 		b.WriteString(files)
 	}
+	if r.SessionID != "" {
+		b.WriteString("\nSession: ")
+		b.WriteString(r.SessionID)
+		b.WriteString("\nIf a previous run in this session was interrupted, call session_log to read the latest transcript entries and continue where it left off. Consult the motive tool for guidance on how to operate.")
+	}
 	return b.String()
 }
 
@@ -261,6 +275,10 @@ func (r *Runtime) emit(event TraceEvent) {
 	}
 }
 
+// Execute runs a fresh execution and returns the final assistant text. If the
+// run is interrupted by a model/network failure, no in-memory state is carried
+// across calls; the caller can re-run and the model recovers by reading the
+// session transcript through the session_log tool.
 func (r *Runtime) Execute(ctx context.Context, request string) (string, error) {
 	if strings.TrimSpace(request) == "" {
 		return "", fmt.Errorf("request is empty")
@@ -292,6 +310,13 @@ func (r *Runtime) Execute(ctx context.Context, request string) (string, error) {
 	ctx, cancel := context.WithTimeout(ctx, budget.MaxDuration)
 	defer cancel()
 
+	// Expose the active session to the tools so session_log can read the
+	// persisted transcript of the current session.
+	if r.Exec != nil {
+		r.Exec.SessionID = r.SessionID
+		r.Exec.SessionLog = r.SessionLog
+	}
+
 	ctxAcc := ContextAccounting{MaxTokens: r.MaxContextTokens}
 	ctxTokens := ctxAcc.Record(messages)
 	r.emit(TraceEvent{Kind: "start", MaxSteps: budget.MaxSteps, MessageCount: len(messages), ContextTokens: ctxTokens, PeakContextTokens: ctxAcc.PeakRequest, MaxContextTokens: r.MaxContextTokens, ReasoningEffort: r.Model.GetReasoningEffort(), BaseRevision: baseRevision})
@@ -300,7 +325,7 @@ func (r *Runtime) Execute(ctx context.Context, request string) (string, error) {
 
 	for step := 0; step < budget.MaxSteps; step++ {
 		if err := ctx.Err(); err != nil {
-			r.emit(TraceEvent{Kind: "finish", Step: step, MaxSteps: budget.MaxSteps, TotalToolCalls: obs.ToolCalls, ContextTokens: ctxAcc.LastRequest, PeakContextTokens: ctxAcc.PeakRequest, MaxContextTokens: r.MaxContextTokens, ServerPromptN: ctxAcc.ServerPromptN, TotalElapsed: time.Since(started), ReasoningEffort: effort, BaseRevision: baseRevision, ResultRevision: r.WS.GitHEAD(), Error: err})
+			r.emit(TraceEvent{Kind: "finish", Step: step + 1, MaxSteps: budget.MaxSteps, TotalToolCalls: obs.ToolCalls, ContextTokens: ctxAcc.LastRequest, PeakContextTokens: ctxAcc.PeakRequest, MaxContextTokens: r.MaxContextTokens, ServerPromptN: ctxAcc.ServerPromptN, TotalElapsed: time.Since(started), ReasoningEffort: effort, BaseRevision: baseRevision, ResultRevision: r.WS.GitHEAD(), Error: err})
 			return "", err
 		}
 

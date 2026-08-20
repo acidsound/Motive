@@ -107,3 +107,49 @@ func TestPreviewTruncation(t *testing.T) {
 		t.Errorf("firstLine = %q, want first line only", got)
 	}
 }
+
+func TestTailReturnsLastN(t *testing.T) {
+	s, _ := NewStore(t.TempDir())
+	id, _ := s.New()
+	for i := 0; i < 5; i++ {
+		_ = s.Append(id, Entry{TS: time.Now(), Role: "user", Content: "msg " + string(rune('a'+i))})
+	}
+
+	tail, err := s.Tail(id, 2)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(tail) != 2 {
+		t.Fatalf("tail len = %d, want 2", len(tail))
+	}
+	if tail[0].Content != "msg d" || tail[1].Content != "msg e" {
+		t.Errorf("tail = %+v, want last two entries", tail)
+	}
+
+	// Tail more than available clamps to available.
+	all, err := s.Tail(id, 100)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(all) != 5 {
+		t.Fatalf("tail clamp len = %d, want 5", len(all))
+	}
+}
+
+func TestFormatEntry(t *testing.T) {
+	e := Entry{TS: time.Date(2024, 1, 2, 3, 4, 5, 0, time.UTC), Role: "user", Content: "hello world"}
+	got := FormatEntry(e)
+	if !strings.Contains(got, "user") || !strings.Contains(got, "hello world") {
+		t.Errorf("FormatEntry = %q", got)
+	}
+
+	// Long content is truncated to a single line.
+	ea := Entry{Role: "assistant", Content: strings.Repeat("x", 300), Tools: []string{"shell · 12B · 5ms"}}
+	got = FormatEntry(ea)
+	if !strings.Contains(got, "[shell · 12B · 5ms]") {
+		t.Errorf("FormatEntry should include tool summary: %q", got)
+	}
+	if strings.Contains(got, "\n") {
+		t.Errorf("FormatEntry should be a single line: %q", got)
+	}
+}

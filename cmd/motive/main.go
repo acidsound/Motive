@@ -42,7 +42,9 @@ func main() {
 		fmt.Fprintf(os.Stderr, "config: %v\n", err)
 		os.Exit(1)
 	}
-	sess, err := session.NewStore(cfg.StateDir + "/sessions")
+
+	sessDir := cfg.StateDir + "/sessions"
+	sess, err := session.NewStore(sessDir)
 	if err != nil {
 		fmt.Fprintf(os.Stderr, "sessions: %v\n", err)
 		os.Exit(1)
@@ -51,6 +53,20 @@ func main() {
 	client := newModelClient(cfg)
 
 	rt := runtime.New(client)
+	// Wire the session log so the session_log tool can read the transcript.
+	rt.SessionLog = func(id string, lines int) (string, error) {
+		entries, err := sess.Tail(id, lines)
+		if err != nil {
+			return "", err
+		}
+		var b strings.Builder
+		fmt.Fprintf(&b, "[session %s: last %d entries]\n", id, len(entries))
+		for _, e := range entries {
+			b.WriteString(session.FormatEntry(e))
+			b.WriteString("\n")
+		}
+		return b.String(), nil
+	}
 	if *verbose {
 		rt.Trace = verboseTrace
 	}

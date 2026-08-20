@@ -46,6 +46,8 @@ The runtime compiles initial context from the system instruction, workspace root
 
 The model is expected to inspect the workspace when necessary rather than receiving the entire workspace implicitly. **[SOURCE]**
 
+When a session is active, the compiled initial context also includes the session id and guidance to consult the `session_log` and `motive` tools to recover from an interrupted run. The session id tells the model where its transcript is persisted; it does not restore prior model context. **[SOURCE][DECISION]**
+
 ## 4. Execution model
 
 The fundamental execution loop is:
@@ -84,8 +86,12 @@ The model has direct access to concrete workspace, shell, web, and Git operation
 - `web_search`
 - `git_status`
 - `git_diff`
+- `session_log`
+- `motive`
 
 **[SOURCE]**
+
+`session_log` reads the tail of the current session's JSONL transcript, and `motive` returns Motive's own operating guidance. Together they let the model recover from an interrupted run by reading where the previous run left off rather than restarting from scratch. **[SOURCE][DECISION]**
 
 Tool results are fed back to the model as tool messages. A tool failure is represented to the model as an `ERROR:` result rather than silently terminating the execution. **[SOURCE]**
 
@@ -120,6 +126,8 @@ A new session is created on the first user submission in the TUI. Subsequent tur
 The TUI provides a session picker (`Ctrl+R` or `--tui -r`) that lists prior sessions by ID, creation time, preview text, revision, and tool-call count. Selecting a session restores its transcript into the TUI view. **[SOURCE][TEST]**
 
 Session persistence is a transcript record, not a model context. Resuming a session does not restore model context; the next execution still starts with a fresh model context per the invariant in §3. **[SOURCE][DECISION]**
+
+The active session id is passed into the model context each turn, and the `session_log` tool can read the tail of the session transcript. Because the transcript is persisted in JSONL, an execution interrupted by a failure can be continued by a later execution that reads the transcript through `session_log` and resumes where the previous run left off; no in-memory continuation state is carried across runs. **[SOURCE][DECISION]**
 
 ## 9. Reasoning effort
 
@@ -166,6 +174,8 @@ An empty user request is rejected before execution. **[SOURCE]**
 A model request failure terminates the execution with an error. **[SOURCE]**
 
 A tool failure does not by itself terminate the execution; the error is returned to the model, allowing the model to recover or choose another action. **[SOURCE]**
+
+An execution interrupted by a model/network failure terminates with an error and carries no in-memory continuation state. Recovery is driven by the model itself: a later run in the same session can read the persisted transcript through the `session_log` tool and continue where the interrupted run left off. **[SOURCE][DECISION]**
 
 A tool failure currently causes the next model turn to use `xhigh` reasoning effort. **[SOURCE]**
 
@@ -266,9 +276,10 @@ Reasoning effort can be changed interactively rather than being restricted to an
 11. **Runtime self-observation is bounded:** model-visible observations contain execution metadata, not hidden reasoning content. **[DECISION]**
 12. **Self-modification is model-directed:** workspace changes occur through the existing tools and are not silently committed or pushed by the runtime. **[SOURCE][DECISION]**
 13. **Session persistence is transcript-only:** JSONL session files record what happened but do not restore model context; each execution still starts fresh. **[SOURCE][DECISION]**
-14. **Validated baseline:** formatting, tests, vetting, and diff checks are expected to remain green before advancing to the next semantic layer. **[TEST][DECISION]**
-15. **TUI is an operational interface:** TUI behavior is part of the practical user-facing runtime, not merely a demonstration layer. **[OBSERVED][DECISION]**
-16. **Implementation/documentation agreement is explicit:** the source implementation is the operational authority, while this document preserves the semantic contract and the evidence for it. **[SOURCE][DECISION]**
+14. **Recovery is model-driven via the transcript:** an interrupted run leaves no in-memory continuation state; the model resumes by reading the session transcript through the `session_log` tool. **[SOURCE][DECISION]**
+15. **Validated baseline:** formatting, tests, vetting, and diff checks are expected to remain green before advancing to the next semantic layer. **[TEST][DECISION]**
+16. **TUI is an operational interface:** TUI behavior is part of the practical user-facing runtime, not merely a demonstration layer. **[OBSERVED][DECISION]**
+17. **Implementation/documentation agreement is explicit:** the source implementation is the operational authority, while this document preserves the semantic contract and the evidence for it. **[SOURCE][DECISION]**
 
 ## 19. Explicitly unresolved semantics
 
@@ -293,7 +304,7 @@ The next work should proceed in this order:
 
 1. **Self-observation quality:** ~~verify that the bounded telemetry exposed to the model is sufficient~~ — the observation is now implemented and appended to model context after tool-bearing turns. Remaining: verify in real executions that the model uses the observation to adjust behavior (e.g., recognizing budget pressure or context growth). **[SOURCE][TEST][DECISION]**
 2. **Anomaly detection:** define observable criteria for pathological executions such as excessive reasoning generation, repeated failed actions, budget pressure, or ineffective tool loops without exposing hidden chain-of-thought.
-3. **Recovery policy:** use those observations to make failure recovery explicit, bounded, and testable rather than relying only on the current one-turn `xhigh` escalation.
+3. **Recovery policy:** use those observations to make failure recovery explicit, bounded, and testable rather than relying only on the current one-turn `xhigh` escalation and model-driven transcript recovery.
 4. **Self-modification boundary:** determine which classes of Motive/workspace changes the model may safely perform autonomously and which require explicit user direction or verification.
 5. **Policy self-modification:** only after observation and recovery semantics are stable, evaluate whether Motive should allow the model to propose or modify execution policy itself, with rollback and verification boundaries.
 

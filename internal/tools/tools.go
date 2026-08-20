@@ -20,8 +20,41 @@ const MaxToolResultBytes = 64 << 10
 
 var diagnosticPattern = regexp.MustCompile(`(?m)([^\s:][^\n:]*):(\d+):(\d+):\s*(.+)$`)
 
+// motiveGuide is the model-visible self-reference content returned by the
+// motive tool. It is deliberately short: enough for the model to recall how to
+// operate and how to recover from an interrupted run without re-reading large
+// documentation.
+const motiveGuide = `Motive is a model-centric software execution runtime. You are the model driving it.
+
+Operating principles:
+- Work directly on the user's workspace; do not merely describe code.
+- Each request is an independent execution: assume no unseen chat history.
+- Inspect the workspace when needed; prefer the smallest relevant context.
+- Use tools decisively: read/write/search files, run shell, search the web, and
+  inspect Git state.
+- When you modify files, verify the resulting state before claiming success.
+- Never claim a commit, push, test, or build unless tool output confirms it.
+
+Recovering from interrupted work:
+- Your current session id is included in your context block.
+- If a previous run in this session was interrupted or failed before finishing,
+  call session_log to read the latest entries of this session's transcript
+  (a .jsonl file) and see where the last run left off, then continue from there
+  rather than starting over.`
+
+// motiveGuidePreview is used in the tool definition description.
+const motiveGuidePreview = "Reference Motive's own operating guidance, including how to recover from an interrupted run."
+
 type Executor struct {
 	WS *workspace.Workspace
+
+	// SessionID is the active session whose transcript session_log reads. It is
+	// set by the runtime before each execution.
+	SessionID string
+	// SessionLog, when non-nil, returns the last `lines` entries of the given
+	// session's .jsonl transcript. It is injected by the caller so the tools
+	// package does not need to depend on the session store directly.
+	SessionLog func(sessionID string, lines int) (string, error)
 
 	mu       sync.Mutex
 	observed map[string]string
@@ -41,6 +74,8 @@ func Definitions() []model.Tool {
 		{Type: "function", Function: model.ToolFunction{Name: "web_search", Description: "Search the public web.", Parameters: obj(map[string]model.ToolProperty{"query": {Type: "string"}}, "query")}},
 		{Type: "function", Function: model.ToolFunction{Name: "git_status", Description: "Show Git branch, revision and working-tree changes.", Parameters: obj(map[string]model.ToolProperty{})}},
 		{Type: "function", Function: model.ToolFunction{Name: "git_diff", Description: "Show the current unstaged Git diff.", Parameters: obj(map[string]model.ToolProperty{})}},
+		{Type: "function", Function: model.ToolFunction{Name: "session_log", Description: "Read the last N entries of the current session's .jsonl transcript so you can recover from an interrupted run.", Parameters: obj(map[string]model.ToolProperty{"lines": {Type: "integer", Description: "Number of trailing transcript entries to return (default 5, max 20)"}})}},
+		{Type: "function", Function: model.ToolFunction{Name: "motive", Description: motiveGuidePreview, Parameters: obj(map[string]model.ToolProperty{})}},
 	}
 }
 
@@ -52,6 +87,12 @@ func (e *Executor) Run(ctx context.Context, name, raw string) (string, error) {
 		return "", fmt.Errorf("invalid %s arguments: %w", name, err)
 	}
 	str := func(key string) string { v, _ := args[key].(string); return v }
+	intArg := func(key string, fallback int) int {
+		if v, ok := args[key].(float64); ok {
+			return int(v)
+		}
+		return fallback
+	}
 
 	var (
 		result string
@@ -80,6 +121,10 @@ func (e *Executor) Run(ctx context.Context, name, raw string) (string, error) {
 		result, err = e.WS.GitStatusContext(ctx)
 	case "git_diff":
 		result, err = e.WS.GitDiffContext(ctx)
+	case "session_log":
+		result, err = e.sessionLog(intArg("lines", 5))
+	case "motive":
+		result = motiveGuide
 	default:
 		return "", fmt.Errorf("unknown tool %q", name)
 	}
@@ -91,6 +136,22 @@ func (e *Executor) Run(ctx context.Context, name, raw string) (string, error) {
 		return Truncate(result), err
 	}
 	return Truncate(result), nil
+}
+
+func (e *Executor) sessionLog(lines int) (string, error) {
+	if e.SessionLog == nil {
+		return "", fmt.Errorf("no session log available (run without a session)")
+	}
+	if e.SessionID == "" {
+		return "", fmt.Errorf("no active session id")
+	}
+	if lines <= 0 {
+		lines = 5
+	}
+	if lines > 20 {
+		lines = 20
+	}
+	return e.SessionLog(e.SessionID, lines)
 }
 
 func (e *Executor) readFile(ctx context.Context, path string) (string, error) {

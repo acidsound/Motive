@@ -308,3 +308,25 @@ func TestExecuteObservationAppended(t *testing.T) {
 		t.Fatalf("second model_start MessageCount=%d, want >= %d (first=%d + assistant + tool + observation)", secondMsgCount, firstMsgCount+3, firstMsgCount)
 	}
 }
+
+func TestContextBlockIncludesSessionID(t *testing.T) {
+	r := &Runtime{
+		WS:        workspace.New(t.TempDir()),
+		SessionID: "test-session-123",
+	}
+	block := r.ContextBlock()
+	if !strings.Contains(block, "Session: test-session-123") {
+		t.Fatalf("context block should include session id:\n%s", block)
+	}
+	if !strings.Contains(block, "session_log") {
+		t.Fatalf("context block should mention session_log tool:\n%s", block)
+	}
+}
+
+func TestContextBlockEmptySessionID(t *testing.T) {
+	r := &Runtime{WS: workspace.New(t.TempDir())}
+	block := r.ContextBlock()
+	if strings.Contains(block, "Session:") {
+		t.Fatalf("context block should not include session id when empty:\n%s", block)
+	}
+}

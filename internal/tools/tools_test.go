@@ -53,3 +53,58 @@ func TestTruncateKeepsValidUTF8(t *testing.T) {
 		t.Fatal("retained prefix exceeds MaxToolResultBytes")
 	}
 }
+
+func TestSessionLogTool(t *testing.T) {
+	e := newExecutor(t)
+	e.SessionID = "sess-1"
+	e.SessionLog = func(id string, lines int) (string, error) {
+		if id != "sess-1" {
+			t.Errorf("session log called with id %q, want sess-1", id)
+		}
+		return "tail content", nil
+	}
+
+	out, err := e.Run(context.Background(), "session_log", "")
+	if err != nil {
+		t.Fatalf("session_log: %v", err)
+	}
+	if out != "tail content" {
+		t.Errorf("session_log = %q, want tail content", out)
+	}
+}
+
+func TestSessionLogToolRespectsLines(t *testing.T) {
+	e := newExecutor(t)
+	e.SessionID = "sess-1"
+	e.SessionLog = func(id string, lines int) (string, error) {
+		if lines != 7 {
+			t.Errorf("session log lines = %d, want 7", lines)
+		}
+		return "ok", nil
+	}
+	if _, err := e.Run(context.Background(), "session_log", `{"lines":7}`); err != nil {
+		t.Fatalf("session_log: %v", err)
+	}
+}
+
+func TestSessionLogToolNoLog(t *testing.T) {
+	e := newExecutor(t)
+	e.SessionID = "sess-1"
+	if _, err := e.Run(context.Background(), "session_log", ""); err == nil {
+		t.Fatal("expected an error when no session log is injected")
+	}
+}
+
+func TestMotiveTool(t *testing.T) {
+	e := newExecutor(t)
+	out, err := e.Run(context.Background(), "motive", "")
+	if err != nil {
+		t.Fatalf("motive: %v", err)
+	}
+	if !strings.Contains(out, "Motive is a model-centric software execution runtime") {
+		t.Errorf("motive tool output missing identity: %q", out)
+	}
+	if !strings.Contains(out, "session_log") {
+		t.Errorf("motive tool output should mention session_log: %q", out)
+	}
+}

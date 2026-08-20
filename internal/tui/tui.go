@@ -469,6 +469,11 @@ func (m *model) submit() (tea.Model, tea.Cmd) {
 			m.sessionID = id
 		}
 	}
+	// Pass the active session to the runtime so the model sees its session id
+	// and the session_log tool can read the transcript to recover.
+	if m.rt != nil {
+		m.rt.SessionID = m.sessionID
+	}
 	if m.sess != nil && m.sessionID != "" {
 		_ = m.sess.Append(m.sessionID, session.Entry{
 			TS:           time.Now(),
@@ -651,6 +656,9 @@ func (m *model) loadSession(id string) {
 		return
 	}
 	m.sessionID = id
+	if m.rt != nil {
+		m.rt.SessionID = id
+	}
 	m.messages = nil
 	m.history = nil
 	m.histIdx = 0
