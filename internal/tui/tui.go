@@ -495,6 +495,11 @@ func (m *model) finishTurn(done doneMsg) (tea.Model, tea.Cmd) {
 		if n := len(m.messages); n > 0 && m.messages[n-1].role == "assistant" && !m.lastAssistantActive() {
 			m.messages = m.messages[:n-1]
 		}
+		// Persist whatever assistant output (content, reasoning, tool calls)
+		// streamed in before the failure so a run interrupted by a network or
+		// budget error still records its in-progress work. saveAssistantEntry
+		// is a no-op when the assistant slot was dropped above.
+		m.saveAssistantEntry()
 		m.appendMessage(message{role: "error", content: done.err.Error(), ts: time.Now()})
 		if m.sess != nil && m.sessionID != "" {
 			_ = m.sess.Append(m.sessionID, session.Entry{

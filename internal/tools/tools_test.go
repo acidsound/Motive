@@ -2,7 +2,9 @@ package tools
 
 import (
 	"context"
+	"os"
 	"os/exec"
+	"path/filepath"
 	"strings"
 	"testing"
 	"unicode/utf8"
@@ -37,6 +39,83 @@ func TestRunUnknownTool(t *testing.T) {
 	e := newExecutor(t)
 	if _, err := e.Run(context.Background(), "no_such_tool", "{}"); err == nil {
 		t.Fatal("expected an error for an unknown tool")
+	}
+}
+
+func TestEditFileTool(t *testing.T) {
+	dir := t.TempDir()
+	path := filepath.Join(dir, "a.txt")
+	if err := os.WriteFile(path, []byte("foo bar baz\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	e := &Executor{WS: workspace.New(dir)}
+	out, err := e.Run(context.Background(), "edit_file", `{"path":"a.txt","old_string":"bar","new_string":"qux"}`)
+	if err != nil {
+		t.Fatalf("edit_file: %v", err)
+	}
+	if !strings.Contains(out, "edited a.txt") {
+		t.Fatalf("edit_file output = %q, want edit summary", out)
+	}
+	data, _ := os.ReadFile(path)
+	if string(data) != "foo qux baz\n" {
+		t.Fatalf("file content = %q, want %q", string(data), "foo qux baz\n")
+	}
+}
+
+func TestEditFileToolReplaceAll(t *testing.T) {
+	dir := t.TempDir()
+	path := filepath.Join(dir, "a.txt")
+	if err := os.WriteFile(path, []byte("x a x a\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	e := &Executor{WS: workspace.New(dir)}
+	if _, err := e.Run(context.Background(), "edit_file", `{"path":"a.txt","old_string":"a","new_string":"b","replace_all":true}`); err != nil {
+		t.Fatalf("edit_file replace_all: %v", err)
+	}
+	data, _ := os.ReadFile(path)
+	if string(data) != "x b x b\n" {
+		t.Fatalf("file content = %q, want %q", string(data), "x b x b\n")
+	}
+}
+
+func TestEditFileToolAmbiguousWithoutReplaceAll(t *testing.T) {
+	dir := t.TempDir()
+	path := filepath.Join(dir, "a.txt")
+	if err := os.WriteFile(path, []byte("x a x a\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	e := &Executor{WS: workspace.New(dir)}
+	_, err := e.Run(context.Background(), "edit_file", `{"path":"a.txt","old_string":"a","new_string":"b"}`)
+	if err == nil {
+		t.Fatal("expected error for ambiguous edit")
+	}
+	if !strings.Contains(err.Error(), "found 2 times") {
+		t.Fatalf("error = %v, want occurrence count", err)
+	}
+}
+
+func TestGlobTool(t *testing.T) {
+	dir := t.TempDir()
+	if err := os.MkdirAll(filepath.Join(dir, "internal"), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(dir, "internal", "x.go"), []byte("a"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	e := &Executor{WS: workspace.New(dir)}
+	out, err := e.Run(context.Background(), "glob", `{"pattern":"**/*.go"}`)
+	if err != nil {
+		t.Fatalf("glob: %v", err)
+	}
+	if out != "internal/x.go" {
+		t.Fatalf("glob output = %q, want internal/x.go", out)
+	}
+}
+
+func TestGlobToolRejectsEmpty(t *testing.T) {
+	e := newExecutor(t)
+	if _, err := e.Run(context.Background(), "glob", `{"pattern":""}`); err == nil {
+		t.Fatal("expected an error for an empty pattern")
 	}
 }
 
@@ -95,6 +174,21 @@ func TestSessionLogToolNoLog(t *testing.T) {
 	}
 }
 
+func TestWebFetchToolRejectsEmptyURL(t *testing.T) {
+	e := newExecutor(t)
+	_, err := e.Run(context.Background(), "web_fetch", `{"url":""}`)
+	if err == nil {
+		t.Fatal("expected an error for an empty url")
+	}
+}
+
+func TestWebFetchToolRejectsNonHTTPScheme(t *testing.T) {
+	e := newExecutor(t)
+	if _, err := e.Run(context.Background(), "web_fetch", `{"url":"file:///etc/passwd"}`); err == nil {
+		t.Fatal("expected an error for a non-http scheme")
+	}
+}
+
 func TestMotiveTool(t *testing.T) {
 	e := newExecutor(t)
 	out, err := e.Run(context.Background(), "motive", "")
@@ -106,5 +200,8 @@ func TestMotiveTool(t *testing.T) {
 	}
 	if !strings.Contains(out, "session_log") {
 		t.Errorf("motive tool output should mention session_log: %q", out)
+	}
+	if !strings.Contains(out, "edit_file") {
+		t.Errorf("motive tool output should mention edit_file: %q", out)
 	}
 }

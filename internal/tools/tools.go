@@ -35,6 +35,12 @@ Operating principles:
 - When you modify files, verify the resulting state before claiming success.
 - Never claim a commit, push, test, or build unless tool output confirms it.
 
+Editing files:
+- Use edit_file for targeted, surgical edits. old_string is matched literally
+  (no regex, no sed/perl) so it is portable to any machine. It must appear
+  exactly once unless you pass replace_all; if it matches multiple times the
+  tool refuses so you can give more context. For full rewrites use write_file.
+
 Recovering from interrupted work:
 - Your current session id is included in your context block.
 - If a previous run in this session was interrupted or failed before finishing,
@@ -64,14 +70,18 @@ func Definitions() []model.Tool {
 	obj := func(props map[string]model.ToolProperty, required ...string) model.Parameters {
 		return model.Parameters{Type: "object", Properties: props, Required: required}
 	}
+	boolProp := func() model.ToolProperty { return model.ToolProperty{Type: "boolean"} }
 	return []model.Tool{
 		{Type: "function", Function: model.ToolFunction{Name: "read_file", Description: "Read a UTF-8 text file in the workspace.", Parameters: obj(map[string]model.ToolProperty{"path": {Type: "string"}}, "path")}},
 		{Type: "function", Function: model.ToolFunction{Name: "write_file", Description: "Create or replace a UTF-8 text file.", Parameters: obj(map[string]model.ToolProperty{"path": {Type: "string"}, "content": {Type: "string"}}, "path", "content")}},
+		{Type: "function", Function: model.ToolFunction{Name: "edit_file", Description: "Surgically replace a unique block of text in a file. old_string is matched literally (never a regex), so it needs no sed/perl and works on any platform. It must appear exactly once unless replace_all is true; otherwise the edit is refused as ambiguous.", Parameters: obj(map[string]model.ToolProperty{"path": {Type: "string"}, "old_string": {Type: "string"}, "new_string": {Type: "string"}, "replace_all": boolProp()}, "path", "old_string", "new_string")}},
 		{Type: "function", Function: model.ToolFunction{Name: "delete_file", Description: "Delete a file in the workspace.", Parameters: obj(map[string]model.ToolProperty{"path": {Type: "string"}}, "path")}},
 		{Type: "function", Function: model.ToolFunction{Name: "list_files", Description: "List files below a workspace directory.", Parameters: obj(map[string]model.ToolProperty{"path": {Type: "string"}})}},
+		{Type: "function", Function: model.ToolFunction{Name: "glob", Description: "List workspace-relative paths matching a glob pattern. Supports * and ? per segment plus ** for any number of directories (e.g. **/*.go). Directories end with '/'.", Parameters: obj(map[string]model.ToolProperty{"pattern": {Type: "string"}}, "pattern")}},
 		{Type: "function", Function: model.ToolFunction{Name: "search_files", Description: "Search text in workspace files.", Parameters: obj(map[string]model.ToolProperty{"query": {Type: "string"}}, "query")}},
 		{Type: "function", Function: model.ToolFunction{Name: "shell", Description: "Execute a shell command in the workspace.", Parameters: obj(map[string]model.ToolProperty{"command": {Type: "string"}}, "command")}},
 		{Type: "function", Function: model.ToolFunction{Name: "web_search", Description: "Search the public web.", Parameters: obj(map[string]model.ToolProperty{"query": {Type: "string"}}, "query")}},
+		{Type: "function", Function: model.ToolFunction{Name: "web_fetch", Description: "Fetch a single http(s) URL and return its text content. Normalises HTML, plain text, and PDF to text. Does not run JavaScript, crawl links, or return binary data.", Parameters: obj(map[string]model.ToolProperty{"url": {Type: "string"}}, "url")}},
 		{Type: "function", Function: model.ToolFunction{Name: "git_status", Description: "Show Git branch, revision and working-tree changes.", Parameters: obj(map[string]model.ToolProperty{})}},
 		{Type: "function", Function: model.ToolFunction{Name: "git_diff", Description: "Show the current unstaged Git diff.", Parameters: obj(map[string]model.ToolProperty{})}},
 		{Type: "function", Function: model.ToolFunction{Name: "session_log", Description: "Read the last N entries of the current session's .jsonl transcript so you can recover from an interrupted run.", Parameters: obj(map[string]model.ToolProperty{"lines": {Type: "integer", Description: "Number of trailing transcript entries to return (default 5, max 20)"}})}},
@@ -87,6 +97,7 @@ func (e *Executor) Run(ctx context.Context, name, raw string) (string, error) {
 		return "", fmt.Errorf("invalid %s arguments: %w", name, err)
 	}
 	str := func(key string) string { v, _ := args[key].(string); return v }
+	boolArg := func(key string) bool { v, _ := args[key].(bool); return v }
 	intArg := func(key string, fallback int) int {
 		if v, ok := args[key].(float64); ok {
 			return int(v)
@@ -105,18 +116,24 @@ func (e *Executor) Run(ctx context.Context, name, raw string) (string, error) {
 		if err = e.WS.WriteContext(ctx, str("path"), str("content")); err == nil {
 			result = "written " + str("path")
 		}
+	case "edit_file":
+		result, err = e.WS.EditContext(ctx, str("path"), str("old_string"), str("new_string"), boolArg("replace_all"))
 	case "delete_file":
 		if err = e.WS.DeleteContext(ctx, str("path")); err == nil {
 			result = "deleted " + str("path")
 		}
 	case "list_files":
 		result, err = e.WS.ListContext(ctx, str("path"))
+	case "glob":
+		result, err = e.WS.GlobContext(ctx, str("pattern"))
 	case "search_files":
 		result, err = e.WS.SearchContext(ctx, str("query"))
 	case "shell":
 		result, err = e.WS.ShellContext(ctx, str("command"))
 	case "web_search":
 		result, err = web.Search(str("query"))
+	case "web_fetch":
+		result, err = web.Fetch(str("url"))
 	case "git_status":
 		result, err = e.WS.GitStatusContext(ctx)
 	case "git_diff":

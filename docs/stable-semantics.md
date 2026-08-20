@@ -79,11 +79,14 @@ The model has direct access to concrete workspace, shell, web, and Git operation
 
 - `read_file`
 - `write_file`
+- `edit_file`
 - `delete_file`
 - `list_files`
+- `glob`
 - `search_files`
 - `shell`
 - `web_search`
+- `web_fetch`
 - `git_status`
 - `git_diff`
 - `session_log`
@@ -92,6 +95,10 @@ The model has direct access to concrete workspace, shell, web, and Git operation
 **[SOURCE]**
 
 `session_log` reads the tail of the current session's JSONL transcript, and `motive` returns Motive's own operating guidance. Together they let the model recover from an interrupted run by reading where the previous run left off rather than restarting from scratch. **[SOURCE][DECISION]**
+
+`edit_file` performs a surgical, literal (never regex) replacement of a block of text in a workspace file. The match must be unique unless `replace_all` is set; an ambiguous match is refused with the occurrence count so the model supplies more context. `glob` lists workspace-relative paths matching a glob pattern (`*`, `?` per segment, `**` for any number of directories; directories end with `/`). Both are workspace-scoped and reject paths or patterns that escape the workspace. **[SOURCE][TEST]**
+
+`web_fetch` retrieves a single http(s) URL and returns its text. Its contract is deliberately stable and format-agnostic: **"URL in, text out."** HTML, plain text, and PDF are normalized to text by content-sniffing codecs; the tool does not run JavaScript, crawl links, manage sessions, or return binary data, and it accepts only http/https. PDF support is one codec behind that contract, so a lighter/better PDF extractor can replace it without changing the tool contract. **[SOURCE][DECISION]**
 
 Tool results are fed back to the model as tool messages. A tool failure is represented to the model as an `ERROR:` result rather than silently terminating the execution. **[SOURCE]**
 
@@ -122,6 +129,8 @@ The state directory for session storage defaults to `~/.motive` and is overridab
 Motive persists conversation transcripts as append-only JSONL files under the state directory. Each entry records a timestamp, role (user/assistant/error), content, optional reasoning, optional tool calls, base/result Git revisions, and elapsed time. **[SOURCE]**
 
 A new session is created on the first user submission in the TUI. Subsequent turns append to the same session file. **[SOURCE]**
+
+When a run is interrupted by an error after partial output has streamed, the TUI persists the in-progress assistant entry (content, reasoning, tool calls) to the transcript before recording the error, so an interrupted run leaves a complete record of its in-progress work. An empty assistant placeholder is not persisted. **[SOURCE][TEST]**
 
 The TUI provides a session picker (`Ctrl+R` or `--tui -r`) that lists prior sessions by ID, creation time, preview text, revision, and tool-call count. Selecting a session restores its transcript into the TUI view. **[SOURCE][TEST]**
 

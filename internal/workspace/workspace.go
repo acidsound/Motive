@@ -104,6 +104,64 @@ func (w *Workspace) DeleteContext(ctx context.Context, name string) error {
 	return os.Remove(p)
 }
 
+// Edit replaces oldString with newString in the file at name. The match is a
+// literal string, never a regex, so the model does not need to know sed/perl
+// syntax and results are fully portable across platforms.
+//
+// oldString must be non-empty. When replaceAll is false the old string must
+// occur exactly once, otherwise the edit is ambiguous and an error is returned
+// so the caller is forced to supply a more specific context. The returned
+// string summarises what changed.
+func (w *Workspace) Edit(name, oldString, newString string, replaceAll bool) (string, error) {
+	return w.EditContext(context.Background(), name, oldString, newString, replaceAll)
+}
+
+func (w *Workspace) EditContext(ctx context.Context, name, oldString, newString string, replaceAll bool) (string, error) {
+	if err := ctx.Err(); err != nil {
+		return "", err
+	}
+	if oldString == "" {
+		return "", fmt.Errorf("old_string must not be empty")
+	}
+	p, err := w.path(name)
+	if err != nil {
+		return "", err
+	}
+	data, err := os.ReadFile(p)
+	if err != nil {
+		return "", fmt.Errorf("read %s: %w", name, err)
+	}
+	if len(data) > 8<<20 {
+		return "", fmt.Errorf("file too large: %s", name)
+	}
+	content := string(data)
+
+	occurrences := strings.Count(content, oldString)
+	if occurrences == 0 {
+		return "", fmt.Errorf("old_string not found in %s", name)
+	}
+	if !replaceAll && occurrences > 1 {
+		return "", fmt.Errorf("old_string found %d times in %s; use replace_all or supply a more specific old_string", occurrences, name)
+	}
+
+	var replaced string
+	if replaceAll {
+		replaced = strings.ReplaceAll(content, oldString, newString)
+	} else {
+		replaced = strings.Replace(content, oldString, newString, 1)
+	}
+	if replaced == content {
+		return "", fmt.Errorf("no change: replacement is identical to original in %s", name)
+	}
+	if err := ctx.Err(); err != nil {
+		return "", err
+	}
+	if err := os.WriteFile(p, []byte(replaced), 0o644); err != nil {
+		return "", err
+	}
+	return fmt.Sprintf("edited %s: replaced %d occurrence(s) of old_string", name, occurrences), nil
+}
+
 func (w *Workspace) List(name string) (string, error) {
 	return w.ListContext(context.Background(), name)
 }
@@ -136,6 +194,97 @@ func (w *Workspace) ListContext(ctx context.Context, name string) (string, error
 		return nil
 	})
 	return out.String(), err
+}
+
+func (w *Workspace) Glob(pattern string) (string, error) {
+	return w.GlobContext(context.Background(), pattern)
+}
+
+// GlobContext returns the workspace-relative paths (one per line) matching a
+// glob pattern. The pattern is relative to the workspace root and supports
+// `*`, `?`, `[...]` per segment, plus `**` which matches zero or more path
+// segments. Directories are suffixed with `/`. `.git` and `node_modules` are
+// skipped, mirroring ListContext.
+func (w *Workspace) GlobContext(ctx context.Context, pattern string) (string, error) {
+	pattern = filepath.ToSlash(strings.TrimSpace(pattern))
+	if pattern == "" || pattern == "." {
+		return "", fmt.Errorf("pattern is required")
+	}
+	if strings.HasPrefix(pattern, "/") {
+		return "", fmt.Errorf("pattern must be relative to the workspace")
+	}
+	if pattern == ".." || strings.HasPrefix(pattern, "../") {
+		return "", fmt.Errorf("pattern escapes workspace: %s", pattern)
+	}
+	pattern = strings.TrimPrefix(pattern, "./")
+	var out strings.Builder
+	err := filepath.WalkDir(w.Root, func(path string, d fs.DirEntry, err error) error {
+		if err != nil {
+			return err
+		}
+		if err := ctx.Err(); err != nil {
+			return err
+		}
+		if path == w.Root {
+			return nil
+		}
+		if d.IsDir() && (d.Name() == ".git" || d.Name() == "node_modules") {
+			return fs.SkipDir
+		}
+		rel, _ := filepath.Rel(w.Root, path)
+		if globMatch(pattern, filepath.ToSlash(rel)) {
+			out.WriteString(filepath.ToSlash(rel))
+			if d.IsDir() {
+				out.WriteByte('/')
+			}
+			out.WriteByte('\n')
+		}
+		return nil
+	})
+	if err != nil {
+		return "", err
+	}
+	if out.Len() == 0 {
+		return "No files matched.", nil
+	}
+	return strings.TrimRight(out.String(), "\n"), nil
+}
+
+// globMatch reports whether path (slash-separated, no leading/trailing slash)
+// matches a slash-separated pattern. `**` matches zero or more path segments;
+// every other segment is matched literally via filepath.Match.
+func globMatch(pattern, path string) bool {
+	return matchSegs(splitGlobSegs(pattern), splitGlobSegs(path))
+}
+
+func splitGlobSegs(s string) []string {
+	s = strings.Trim(s, "/")
+	if s == "" {
+		return nil
+	}
+	return strings.Split(s, "/")
+}
+
+func matchSegs(psegs, ssegs []string) bool {
+	if len(psegs) == 0 {
+		return len(ssegs) == 0
+	}
+	if psegs[0] == "**" {
+		for i := 0; i <= len(ssegs); i++ {
+			if matchSegs(psegs[1:], ssegs[i:]) {
+				return true
+			}
+		}
+		return false
+	}
+	if len(ssegs) == 0 {
+		return false
+	}
+	ok, err := filepath.Match(psegs[0], ssegs[0])
+	if err != nil || !ok {
+		return false
+	}
+	return matchSegs(psegs[1:], ssegs[1:])
 }
 
 func (w *Workspace) Search(query string) (string, error) {

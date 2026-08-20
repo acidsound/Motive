@@ -2,7 +2,7 @@
 
 Motive is a small model-centric execution runtime. The model is the reasoning and planning component; Motive provides a workspace, tools, execution, and revision-aware environment.
 
-The initial implementation deliberately avoids an agent framework and plugin system. It talks to any OpenAI-compatible `/v1/chat/completions` endpoint and gives the model direct access to files, shell, web search, and Git state.
+The initial implementation deliberately avoids an agent framework and plugin system. It talks to any OpenAI-compatible `/v1/chat/completions` endpoint and gives the model direct access to files, shell, web search/fetch, and Git state.
 
 ## Current loop
 
@@ -95,10 +95,10 @@ esc / ctrl+c   quit
 
 ## Tools exposed to the model
 
-- `read_file`, `write_file`, `delete_file`
-- `list_files`, `search_files`
+- `read_file`, `write_file`, `edit_file`, `delete_file`
+- `list_files`, `glob`, `search_files`
 - `shell`
-- `web_search`
+- `web_search`, `web_fetch`
 - `git_status`, `git_diff`
 
 The tool set is intentionally concrete. There is no planner, sub-agent layer, memory manager, or plugin registry in the execution path.
