@@ -40,18 +40,6 @@ func TestTruncateUTF8(t *testing.T) {
 	}
 }
 
-func TestBoundedEnvInt(t *testing.T) {
-	const key = "MOTIVE_TEST_BOUNDED"
-	t.Setenv(key, "999")
-	if got := boundedEnvInt(key, 32, 256); got != 256 {
-		t.Fatalf("boundedEnvInt high = %d, want 256", got)
-	}
-	t.Setenv(key, "0")
-	if got := boundedEnvInt(key, 32, 256); got != 32 {
-		t.Fatalf("boundedEnvInt zero = %d, want 32", got)
-	}
-}
-
 func TestEstimateContextTokens(t *testing.T) {
 	small := []model.Message{{Role: "user", Content: "hi"}}
 	big := []model.Message{{Role: "user", Content: strings.Repeat("x", 4096)}}

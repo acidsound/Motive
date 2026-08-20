@@ -24,8 +24,8 @@ func newModelClient(cfg *config.Config) *model.Client {
 		BaseURL:         strings.TrimRight(cfg.Default.BaseURL, "/"),
 		Model:           cfg.Default.Model,
 		APIKey:          cfg.Default.APIKey,
-		Temperature:     envFloat("MOTIVE_TEMPERATURE", 0.6),
-		MaxTokens:       envInt("MOTIVE_MAX_TOKENS", 0),
+		Temperature:     cfg.Default.EffectiveTemperature(),
+		MaxTokens:       cfg.Default.MaxTokens,
 		ReasoningEffort: cfg.Default.ReasoningEffort,
 		HTTP:            model.NewHTTPClient(),
 	}
@@ -52,7 +52,7 @@ func main() {
 
 	client := newModelClient(cfg)
 
-	rt := runtime.New(client)
+	rt := runtime.New(client, cfg)
 	// Wire the session log so the session_log tool can read the transcript.
 	rt.SessionLog = func(id string, lines int) (string, error) {
 		entries, err := sess.Tail(id, lines)
@@ -133,28 +133,4 @@ func shortRevision(revision string) string {
 		return revision[:12]
 	}
 	return revision
-}
-
-func envFloat(key string, fallback float64) float64 {
-	v := strings.TrimSpace(os.Getenv(key))
-	if v == "" {
-		return fallback
-	}
-	var parsed float64
-	if _, err := fmt.Sscanf(v, "%f", &parsed); err != nil {
-		return fallback
-	}
-	return parsed
-}
-
-func envInt(key string, fallback int) int {
-	v := strings.TrimSpace(os.Getenv(key))
-	if v == "" {
-		return fallback
-	}
-	var parsed int
-	if _, err := fmt.Sscanf(v, "%d", &parsed); err != nil {
-		return fallback
-	}
-	return parsed
 }

@@ -36,26 +36,30 @@ go build -o bin/motive ./cmd/motive
 ./bin/motive --tui -r   # open the session picker on start
 ```
 
-Configuration:
+## Configuration
 
-```text
-MOTIVE_BASE_URL   default: http://127.0.0.1:8080/v1
-MOTIVE_MODEL      default: Qwen3.8-27B
-MOTIVE_API_KEY    optional
-MOTIVE_WORKSPACE  default: current directory
-MOTIVE_STATE_DIR  session storage, default: ~/.motive
-```
+Every setting can come from an environment variable or from a TOML config file.
+Environment variables always win over the file, so the file is a complete,
+persistent default and the environment is a per-invocation override. The one
+exception is `MOTIVE_CONFIG`, which points at the file itself.
 
-`OPENAI_BASE_URL`, `OPENAI_MODEL`, and `OPENAI_API_KEY` are accepted as fallbacks.
+### Config file
 
-### Providers
-
-Named providers and the active one can be set in a TOML file (default
-`~/.config/motive/config.toml`, override with `MOTIVE_CONFIG`):
+Default location `~/.config/motive/config.toml` (override with `MOTIVE_CONFIG`):
 
 ```toml
-default_provider = "dp4090"
+# Top level
+default_provider = "gateway"   # which provider is active
+state_dir = "~/.motive"        # session storage        (MOTIVE_STATE_DIR)
+workspace = "."                # workspace root         (MOTIVE_WORKSPACE); empty = cwd
 
+# Execution budget (all optional, capped at hard maximums)
+max_steps = 32                 # MOTIVE_MAX_STEPS
+execution_minutes = 30         # MOTIVE_EXECUTION_MINUTES
+max_tool_calls = 128           # MOTIVE_MAX_TOOL_CALLS
+max_context_tokens = 0         # MOTIVE_MAX_CONTEXT_TOKENS; 0 = no limit
+
+# Named providers
 [[providers]]
 name = "dp4090"
 base_url = "http://100.72.102.121:8080/v1"
@@ -67,12 +71,36 @@ name = "gateway"
 base_url = "http://127.0.0.1:8787/v1"
 model = "qwen3.8-27b"
 models = ["deepseek-v4-pro", "gemma-4-31b"]
+api_key = ""                   # optional
+reasoning_effort = "medium"    # low | medium | xhigh
+temperature = 0.6              # sampling temperature; omit for the 0.6 default
+max_tokens = 0                 # response cap; 0 = no limit
 ```
 
-`model` is the default id; `models` adds extra selectable ids. Environment
-variables (`MOTIVE_BASE_URL`, `MOTIVE_MODEL`, `MOTIVE_API_KEY`) always override
-the active provider. Without a config file, the environment variables form a
-single "default" provider.
+`model` is the default id; `models` adds extra selectable ids. `temperature`
+accepts `0` (an explicit zero is honored, not treated as "unset"). Without a
+config file, the environment variables form a single "default" provider.
+
+### Environment variables
+
+| Variable | Config key | Default |
+| --- | --- | --- |
+| `MOTIVE_CONFIG` | — (points at the file) | `~/.config/motive/config.toml` |
+| `MOTIVE_BASE_URL` | `base_url` | `http://127.0.0.1:8080/v1` |
+| `MOTIVE_MODEL` | `model` | `Qwen3.8-27B` |
+| `MOTIVE_API_KEY` | `api_key` | — |
+| `MOTIVE_REASONING_EFFORT` | `reasoning_effort` | `low` |
+| `MOTIVE_TEMPERATURE` | `temperature` | `0.6` |
+| `MOTIVE_MAX_TOKENS` | `max_tokens` | `0` (no limit) |
+| `MOTIVE_WORKSPACE` | `workspace` | current directory |
+| `MOTIVE_STATE_DIR` | `state_dir` | `~/.motive` |
+| `MOTIVE_MAX_STEPS` | `max_steps` | `32` |
+| `MOTIVE_EXECUTION_MINUTES` | `execution_minutes` | `30` |
+| `MOTIVE_MAX_TOOL_CALLS` | `max_tool_calls` | `128` |
+| `MOTIVE_MAX_CONTEXT_TOKENS` | `max_context_tokens` | `0` (no limit) |
+
+`OPENAI_BASE_URL`, `OPENAI_MODEL`, and `OPENAI_API_KEY` are accepted as
+fallbacks for the endpoint settings when no `MOTIVE_*` value is set.
 
 ### TUI
 

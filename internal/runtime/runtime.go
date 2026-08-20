@@ -4,12 +4,11 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
-	"os"
-	"strconv"
 	"strings"
 	"time"
 	"unicode/utf8"
 
+	"github.com/acidsound/Motive/internal/config"
 	"github.com/acidsound/Motive/internal/model"
 	"github.com/acidsound/Motive/internal/tools"
 	"github.com/acidsound/Motive/internal/workspace"
@@ -195,55 +194,23 @@ func (r *Runtime) takeSteer() string {
 	}
 }
 
-const (
-	defaultMaxSteps         = 32
-	defaultMaxMinutes       = 30
-	defaultMaxToolCalls     = 128
-	maxAllowedSteps         = 256
-	maxAllowedMinutes       = 120
-	maxAllowedToolCalls     = 1024
-	maxAllowedContextTokens = 1_000_000
-)
-
-func New(client *model.Client) *Runtime {
-	root := os.Getenv("MOTIVE_WORKSPACE")
-	ws := workspace.New(root)
-	steps := boundedEnvInt("MOTIVE_MAX_STEPS", defaultMaxSteps, maxAllowedSteps)
-	minutes := boundedEnvInt("MOTIVE_EXECUTION_MINUTES", defaultMaxMinutes, maxAllowedMinutes)
-	toolCalls := boundedEnvInt("MOTIVE_MAX_TOOL_CALLS", defaultMaxToolCalls, maxAllowedToolCalls)
-	contextTokens := boundedEnvInt("MOTIVE_MAX_CONTEXT_TOKENS", 0, maxAllowedContextTokens)
+// New builds a runtime from the resolved configuration. The workspace root and
+// the execution budget are read from cfg (already resolved: environment wins
+// over the config file, then the built-in default, capped at the allowed max).
+func New(client *model.Client, cfg *config.Config) *Runtime {
+	ws := workspace.New(cfg.Workspace)
 	return &Runtime{
 		Model:            client,
 		WS:               ws,
 		Exec:             &tools.Executor{WS: ws},
-		MaxSteps:         steps,
-		MaxContextTokens: contextTokens,
+		MaxSteps:         cfg.MaxSteps,
+		MaxContextTokens: cfg.MaxContextTokens,
 		Budget: ExecutionBudget{
-			MaxSteps:     steps,
-			MaxDuration:  time.Duration(minutes) * time.Minute,
-			MaxToolCalls: toolCalls,
+			MaxSteps:     cfg.MaxSteps,
+			MaxDuration:  time.Duration(cfg.ExecutionMinutes) * time.Minute,
+			MaxToolCalls: cfg.MaxToolCalls,
 		},
 	}
-}
-
-func envInt(key string, fallback int) int {
-	v := strings.TrimSpace(os.Getenv(key))
-	if v == "" {
-		return fallback
-	}
-	n, err := strconv.Atoi(v)
-	if err != nil || n <= 0 {
-		return fallback
-	}
-	return n
-}
-
-func boundedEnvInt(key string, fallback, maximum int) int {
-	value := envInt(key, fallback)
-	if value > maximum {
-		return maximum
-	}
-	return value
 }
 
 func (r *Runtime) ContextBlock() string {
@@ -310,20 +277,20 @@ func (r *Runtime) Execute(ctx context.Context, request string) (string, error) {
 	if budget.MaxSteps <= 0 {
 		budget.MaxSteps = r.MaxSteps
 	}
-	if budget.MaxSteps > maxAllowedSteps {
-		budget.MaxSteps = maxAllowedSteps
+	if budget.MaxSteps > config.MaxAllowedSteps {
+		budget.MaxSteps = config.MaxAllowedSteps
 	}
 	if budget.MaxDuration <= 0 {
-		budget.MaxDuration = defaultMaxMinutes * time.Minute
+		budget.MaxDuration = config.DefaultMaxMinutes * time.Minute
 	}
-	if budget.MaxDuration > maxAllowedMinutes*time.Minute {
-		budget.MaxDuration = maxAllowedMinutes * time.Minute
+	if budget.MaxDuration > config.MaxAllowedMinutes*time.Minute {
+		budget.MaxDuration = config.MaxAllowedMinutes * time.Minute
 	}
 	if budget.MaxToolCalls <= 0 {
-		budget.MaxToolCalls = defaultMaxToolCalls
+		budget.MaxToolCalls = config.DefaultMaxToolCalls
 	}
-	if budget.MaxToolCalls > maxAllowedToolCalls {
-		budget.MaxToolCalls = maxAllowedToolCalls
+	if budget.MaxToolCalls > config.MaxAllowedToolCalls {
+		budget.MaxToolCalls = config.MaxAllowedToolCalls
 	}
 	ctx, cancel := context.WithTimeout(ctx, budget.MaxDuration)
 	defer cancel()
