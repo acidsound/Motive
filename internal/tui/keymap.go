@@ -14,9 +14,11 @@ type Binding string
 // MOTIVE_KEY_<NAME> environment variable (e.g. MOTIVE_KEY_SCROLL_UP=ctrl+k).
 type Keymap struct {
 	Quit            Binding
+	Stop            Binding
 	Run             Binding
 	Newline         Binding
 	CycleEffort     Binding
+	CycleQueueMode  Binding
 	SessionPicker   Binding
 	DiffToggle      Binding
 	ToolsToggle     Binding
@@ -35,9 +37,11 @@ type Keymap struct {
 func DefaultKeymap() Keymap {
 	return Keymap{
 		Quit:            "ctrl+c",
+		Stop:            "esc",
 		Run:             "enter",
 		Newline:         "shift+enter",
 		CycleEffort:     "ctrl+e",
+		CycleQueueMode:  "ctrl+\\",
 		SessionPicker:   "ctrl+r",
 		DiffToggle:      "ctrl+d",
 		ToolsToggle:     "ctrl+t",
@@ -57,9 +61,11 @@ func DefaultKeymap() Keymap {
 // ApplyEnv overlays MOTIVE_KEY_* environment variables on top of the defaults.
 func (k *Keymap) ApplyEnv() {
 	k.Quit = envBinding("MOTIVE_KEY_QUIT", k.Quit)
+	k.Stop = envBinding("MOTIVE_KEY_STOP", k.Stop)
 	k.Run = envBinding("MOTIVE_KEY_RUN", k.Run)
 	k.Newline = envBinding("MOTIVE_KEY_NEWLINE", k.Newline)
 	k.CycleEffort = envBinding("MOTIVE_KEY_CYCLE_EFFORT", k.CycleEffort)
+	k.CycleQueueMode = envBinding("MOTIVE_KEY_CYCLE_QUEUE_MODE", k.CycleQueueMode)
 	k.SessionPicker = envBinding("MOTIVE_KEY_SESSION_PICKER", k.SessionPicker)
 	k.DiffToggle = envBinding("MOTIVE_KEY_DIFF_TOGGLE", k.DiffToggle)
 	k.ToolsToggle = envBinding("MOTIVE_KEY_TOOLS_TOGGLE", k.ToolsToggle)

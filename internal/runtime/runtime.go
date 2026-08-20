@@ -175,6 +175,24 @@ type Runtime struct {
 	// a failure look at what happened last and continue instead of restarting.
 	// When nil, the session_log tool reports that no log is available.
 	SessionLog func(sessionID string, lines int) (string, error)
+	// Steer receives user messages that are injected into a running execution
+	// at the next step boundary (after tool results, or instead of finishing).
+	// Set by the TUI; nil disables steering (one-shot CLI runs).
+	Steer chan string
+}
+
+// takeSteer returns a pending steer message without blocking, or "" when none
+// is available (or steering is disabled).
+func (r *Runtime) takeSteer() string {
+	if r.Steer == nil {
+		return ""
+	}
+	select {
+	case s := <-r.Steer:
+		return s
+	default:
+		return ""
+	}
 }
 
 const (
@@ -367,6 +385,12 @@ func (r *Runtime) Execute(ctx context.Context, request string) (string, error) {
 				r.emit(TraceEvent{Kind: "finish", Step: stepNumber, MaxSteps: budget.MaxSteps, TotalToolCalls: obs.ToolCalls, ContextTokens: ctxAcc.LastRequest, PeakContextTokens: ctxAcc.PeakRequest, MaxContextTokens: r.MaxContextTokens, ServerPromptN: ctxAcc.ServerPromptN, TotalElapsed: time.Since(started), ReasoningEffort: effort, BaseRevision: baseRevision, ResultRevision: r.WS.GitHEAD(), Error: err})
 				return "", err
 			}
+			// The user steered the run before it finished: append the steer as
+			// a user message and continue instead of returning.
+			if steer := r.takeSteer(); steer != "" {
+				messages = append(messages, model.Message{Role: "user", Content: steer})
+				continue
+			}
 			r.emit(TraceEvent{Kind: "finish", Step: stepNumber, MaxSteps: budget.MaxSteps, TotalToolCalls: obs.ToolCalls, ContextTokens: ctxAcc.LastRequest, PeakContextTokens: ctxAcc.PeakRequest, MaxContextTokens: r.MaxContextTokens, ServerPromptN: ctxAcc.ServerPromptN, TotalElapsed: time.Since(started), ReasoningEffort: effort, BaseRevision: baseRevision, ResultRevision: r.WS.GitHEAD()})
 			return strings.Join(trace, "\n\n"), nil
 		}
@@ -422,6 +446,12 @@ func (r *Runtime) Execute(ctx context.Context, request string) (string, error) {
 
 		// Append the runtime observation so the model can see execution state.
 		messages = append(messages, model.Message{Role: "user", Content: obs.Format()})
+
+		// Inject a steer that arrived while tools ran, so the next model call
+		// sees it right after the observation.
+		if steer := r.takeSteer(); steer != "" {
+			messages = append(messages, model.Message{Role: "user", Content: steer})
+		}
 	}
 
 	err := fmt.Errorf("execution budget exceeded: %d steps", budget.MaxSteps)

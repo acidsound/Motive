@@ -30,6 +30,7 @@ const (
 	colorEffort    = "#e0af68"
 	colorBookmark  = "#e0af68"
 	colorScrollPos = "#7dcfff"
+	colorStopped   = "#a9b1d6"
 )
 
 var (
@@ -40,6 +41,7 @@ var (
 	styleTool      = lipgloss.NewStyle().Foreground(lipgloss.Color(colorTool))
 	styleToolSum   = lipgloss.NewStyle().Faint(true).Foreground(lipgloss.Color(colorTool))
 	styleError     = lipgloss.NewStyle().Foreground(lipgloss.Color(colorError))
+	styleStopped   = lipgloss.NewStyle().Foreground(lipgloss.Color(colorStopped))
 	styleStatus    = lipgloss.NewStyle().Foreground(lipgloss.Color(colorStatusFg)).Background(lipgloss.Color(colorStatusBg))
 	styleIdle      = lipgloss.NewStyle().Foreground(lipgloss.Color(colorIdle))
 	styleEffort    = lipgloss.NewStyle().Foreground(lipgloss.Color(colorEffort))
@@ -91,6 +93,21 @@ type model struct {
 	histIdx   int
 	busy      bool
 	sessionID string
+
+	// stopCancel cancels the in-flight execution; nil when idle.
+	stopCancel context.CancelFunc
+	// stopping is set when the user stops a run so finishTurn records a
+	// "stopped" entry instead of an error.
+	stopping bool
+	// stoppedPersisted guards persistStopped so the quit path and finishTurn
+	// (which can both settle the same stopped turn) record exactly one entry.
+	stoppedPersisted bool
+	// queue holds user requests submitted while busy (queue mode); processed
+	// FIFO after the current turn ends.
+	queue []string
+	// steerMode selects what enter does while busy: false queues the text for
+	// the next turn, true steers the running execution.
+	steerMode bool
 
 	width  int
 	height int
@@ -238,6 +255,7 @@ func Run(rt *runtime.Runtime, cfg *config.Config, sess *session.Store, startPick
 	m := newModel(rt, cfg, sess, startPicker)
 	p := tea.NewProgram(&m)
 	m.prog = p
+	rt.Steer = make(chan string, 16)
 	prevTrace := rt.Trace
 	rt.Trace = func(event runtime.TraceEvent) {
 		if prevTrace != nil {
@@ -303,19 +321,33 @@ func (m *model) handleKey(msg tea.KeyPressMsg) (tea.Model, tea.Cmd) {
 		return m.handleOverlayKey(msg)
 	}
 	switch msg.String() {
-	case string(m.keys.Quit), "esc", "ctrl+c":
+	case string(m.keys.Quit), "ctrl+c":
+		// Quit always exits. While busy, stop the run first so the partial
+		// output and a "stopped" entry are persisted before the program ends.
+		// The queue is dropped: queued turns must not start just to be
+		// stopped by the exit.
 		if m.busy {
+			m.queue = nil
+			m.stopExecution()
+			m.persistStopped()
+		}
+		return m, tea.Quit
+
+	case string(m.keys.Stop), "esc":
+		// Stop cancels the in-flight run; finishTurn records the "stopped"
+		// entry when the run's doneMsg arrives.
+		if m.busy {
+			m.stopExecution()
 			return m, nil
 		}
 		if m.helpOpen {
 			m.helpOpen = false
-			return m, nil
 		}
-		return m, tea.Quit
+		return m, nil
 
 	case string(m.keys.Run):
 		if m.busy {
-			return m, nil
+			return m.submitBusy()
 		}
 		return m.submit()
 
@@ -329,6 +361,13 @@ func (m *model) handleKey(msg tea.KeyPressMsg) (tea.Model, tea.Cmd) {
 			return m, nil
 		}
 		m.cycleEffort()
+		return m, nil
+
+	case string(m.keys.CycleQueueMode):
+		// Only meaningful while a run is in progress.
+		if m.busy {
+			m.steerMode = !m.steerMode
+		}
 		return m, nil
 
 	case string(m.keys.SessionPicker):
@@ -435,9 +474,7 @@ func (m *model) handleOverlayKey(msg tea.KeyPressMsg) (tea.Model, tea.Cmd) {
 	return m, nil
 }
 
-// submit starts a new execution turn: records history, appends transcript
-// entries, opens the assistant message the stream fills, and persists the user
-// request to the current session.
+// submit starts a new execution turn from the input box.
 func (m *model) submit() (tea.Model, tea.Cmd) {
 	request := strings.TrimSpace(m.input.Value())
 	if request == "" {
@@ -445,6 +482,13 @@ func (m *model) submit() (tea.Model, tea.Cmd) {
 	}
 	m.input.Reset()
 	m.syncInputHeight()
+	return m.startTurn(request)
+}
+
+// startTurn starts a new execution turn for the given request: records
+// history, appends transcript entries, opens the assistant message the stream
+// fills, and persists the user request to the current session.
+func (m *model) startTurn(request string) (tea.Model, tea.Cmd) {
 	m.histIdx = len(m.history)
 	m.history = append(m.history, request)
 
@@ -456,6 +500,9 @@ func (m *model) submit() (tea.Model, tea.Cmd) {
 
 	m.busy = true
 	m.step = 0
+	m.stopping = false
+	m.stoppedPersisted = false
+	m.stopCancel = nil
 	if m.rt != nil {
 		m.maxSteps = m.rt.Budget.MaxSteps
 		m.rt.Stream = true
@@ -484,11 +531,108 @@ func (m *model) submit() (tea.Model, tea.Cmd) {
 	}
 
 	m.appendMessage(message{role: "assistant", ts: time.Now()})
-	return m, execute(m.rt, request)
+	return m, m.startExecution(request)
+}
+
+// startExecution runs the turn in a cancellable context; the cancel func is
+// kept on the model so esc (stop) can abort the in-flight request.
+func (m *model) startExecution(request string) tea.Cmd {
+	ctx, cancel := context.WithTimeout(context.Background(), m.rt.Budget.MaxDuration)
+	m.stopCancel = cancel
+	return func() tea.Msg {
+		result, err := m.rt.Execute(ctx, request)
+		return doneMsg{text: result, err: err}
+	}
+}
+
+// submitBusy handles enter while a run is in progress: in steer mode the text
+// is injected into the running execution (falling back to the queue when the
+// steer channel is full); in queue mode it is appended for the next turn.
+func (m *model) submitBusy() (tea.Model, tea.Cmd) {
+	request := strings.TrimSpace(m.input.Value())
+	if request == "" {
+		return m, nil
+	}
+	m.input.Reset()
+	m.syncInputHeight()
+	if m.steerMode && m.rt != nil && m.rt.Steer != nil {
+		select {
+		case m.rt.Steer <- request:
+			// Persist the in-progress assistant output (if any) first so the
+			// transcript keeps it before the steer message. If the slot is
+			// still an empty placeholder, drop it so the transcript does not
+			// keep a phantom blank assistant message.
+			if m.lastAssistantActive() {
+				m.saveAssistantEntry()
+			} else if n := len(m.messages); n > 0 && m.messages[n-1].role == "assistant" {
+				m.messages = m.messages[:n-1]
+			}
+			m.appendMessage(message{role: "user", content: request, ts: time.Now()})
+			if m.sess != nil && m.sessionID != "" {
+				_ = m.sess.Append(m.sessionID, session.Entry{
+					TS:      time.Now(),
+					Role:    "user",
+					Content: request,
+				})
+			}
+			return m, nil
+		default:
+			// Steer channel full: queue the message instead.
+		}
+	}
+	m.queue = append(m.queue, request)
+	return m, nil
+}
+
+// stopExecution cancels the in-flight run and marks it as a user stop.
+func (m *model) stopExecution() {
+	if m.stopCancel != nil {
+		m.stopCancel()
+	}
+	m.stopping = true
+}
+
+// persistStopped records the in-progress assistant output (if any) and a
+// "stopped" entry so the transcript shows the user interrupted the run.
+// Idempotent: the quit path and finishTurn can both settle the same stopped
+// turn, and only the first call persists anything.
+func (m *model) persistStopped() {
+	if m.stoppedPersisted {
+		return
+	}
+	m.stoppedPersisted = true
+	m.saveAssistantEntry()
+	m.appendMessage(message{role: "stopped", content: "stopped by user", ts: time.Now()})
+	if m.sess != nil && m.sessionID != "" {
+		_ = m.sess.Append(m.sessionID, session.Entry{
+			TS:      time.Now(),
+			Role:    "stopped",
+			Content: "stopped by user",
+		})
+	}
+}
+
+// nextQueued starts the next queued request, if any.
+func (m *model) nextQueued() (tea.Model, tea.Cmd) {
+	if len(m.queue) == 0 {
+		return m, nil
+	}
+	next := m.queue[0]
+	m.queue = m.queue[1:]
+	return m.startTurn(next)
 }
 
 func (m *model) finishTurn(done doneMsg) (tea.Model, tea.Cmd) {
 	m.busy = false
+	// A user stop surfaces as a canceled context. If the turn nevertheless
+	// finished cleanly (done.err == nil), treat it as a normal success.
+	stopped := m.stopping && done.err != nil
+	m.stopping = false
+	m.stopCancel = nil
+	if stopped {
+		m.persistStopped()
+		return m.nextQueued()
+	}
 	if done.err != nil {
 		// Drop the empty assistant placeholder that submit() appended so an
 		// error turn does not leave a phantom blank message in the transcript.
@@ -511,7 +655,9 @@ func (m *model) finishTurn(done doneMsg) (tea.Model, tea.Cmd) {
 				ElapsedMS:      m.elapsed.Milliseconds(),
 			})
 		}
-		return m, nil
+		// A failed turn must not silently drop queued requests: continue
+		// with the next queued turn, if any.
+		return m.nextQueued()
 	}
 	if text := strings.TrimSpace(done.text); text != "" && !m.lastAssistantActive() {
 		// Fill the assistant slot that submit() opened instead of appending
@@ -521,7 +667,8 @@ func (m *model) finishTurn(done doneMsg) (tea.Model, tea.Cmd) {
 	}
 	m.saveAssistantEntry()
 	m.scroll = 0
-	return m, nil
+	// Continue with queued requests, if any.
+	return m.nextQueued()
 }
 
 func (m *model) saveAssistantEntry() {
@@ -545,6 +692,12 @@ func (m *model) saveAssistantEntry() {
 }
 
 func (m *model) handleTrace(event runtime.TraceEvent) (tea.Model, tea.Cmd) {
+	// While a user stop is in progress, ignore late stream events so they do
+	// not touch the transcript after the "stopped" entry is recorded, and so
+	// the busy state stays until finishTurn settles the turn.
+	if m.stopping {
+		return m, nil
+	}
 	m.elapsed = event.TotalElapsed
 	switch event.Kind {
 	case "start":
@@ -678,6 +831,8 @@ func (m *model) loadSession(id string) {
 			m.appendMessage(message{role: "assistant", content: e.Content, reasoning: e.Reasoning, tools: e.Tools, ts: e.TS})
 		case "error":
 			m.appendMessage(message{role: "error", content: e.Content, ts: e.TS})
+		case "stopped":
+			m.appendMessage(message{role: "stopped", content: e.Content, ts: e.TS})
 		}
 		if e.BaseRevision != "" {
 			m.baseRev = e.BaseRevision
@@ -732,15 +887,6 @@ func (m *model) openDiff() {
 	m.diffLines = colorizeDiff(diff)
 	m.diffScroll = 0
 	m.overlay = overlayDiff
-}
-
-func execute(rt *runtime.Runtime, request string) tea.Cmd {
-	return func() tea.Msg {
-		ctx, cancel := context.WithTimeout(context.Background(), rt.Budget.MaxDuration)
-		defer cancel()
-		result, err := rt.Execute(ctx, request)
-		return doneMsg{text: result, err: err}
-	}
 }
 
 // renderTranscript lays out every message (newest at the bottom), applies the
@@ -799,6 +945,8 @@ func (m model) renderMessage(msg message, width int) []string {
 		return wrapStyled(styleUser.Render("❯ "+msg.content), width)
 	case "error":
 		return wrapStyled(styleError.Render("✖ "+msg.content), width)
+	case "stopped":
+		return wrapStyled(styleStopped.Render("⏹ "+msg.content), width)
 	case "assistant":
 		var out []string
 		if r := strings.TrimSpace(msg.reasoning); r != "" {
@@ -850,6 +998,16 @@ func (m model) statusLine() string {
 	}
 	if m.busy {
 		b.WriteString(fmt.Sprintf(" · step %d/%d · tools %d · %s", m.step, m.maxSteps, m.toolCalls, m.elapsed.Round(time.Second)))
+		// Enter-mode while busy: steer (inject into the running execution) or
+		// queue (FIFO for the next turn), cycled with ctrl+\.
+		mode := "queue"
+		if m.steerMode {
+			mode = "steer"
+		}
+		b.WriteString(" · " + styleEffort.Render(mode))
+		if len(m.queue) > 0 {
+			b.WriteString(fmt.Sprintf(" · queue %d", len(m.queue)))
+		}
 	}
 	if m.rt != nil {
 		b.WriteString(fmt.Sprintf(" · budget %d steps / %d tools / %s", m.rt.Budget.MaxSteps, m.rt.Budget.MaxToolCalls, m.rt.Budget.MaxDuration.Round(time.Minute)))
@@ -1029,7 +1187,9 @@ func buildHelpLines(k Keymap) []string {
 		desc string
 	}
 	rows := []row{
-		{string(k.Run), "Send message"},
+		{string(k.Run), "Send (busy: steer/queue)"},
+		{string(k.CycleQueueMode), "Cycle steer/queue (busy)"},
+		{string(k.Stop), "Stop run (busy) / close help"},
 		{string(k.Newline), "Insert newline"},
 		{string(k.CycleEffort), "Cycle effort"},
 		{string(k.SessionPicker), "Session picker"},

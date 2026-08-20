@@ -14,10 +14,14 @@ import (
 )
 
 // Entry is one persisted transcript line: a user request, an assistant reply,
-// a tool line, or an error.
+// a tool line, an error, or a user stop.
+//
+// "stopped" is a Motive transcript role, not a chat API role: it must never
+// be sent to a model as a message role. The transcript is model-visible only
+// through the session_log tool, which renders entries as plain text.
 type Entry struct {
 	TS             time.Time `json:"ts"`
-	Role           string    `json:"role"` // user | assistant | error | tool
+	Role           string    `json:"role"` // user | assistant | error | tool | stopped
 	Content        string    `json:"content,omitempty"`
 	Reasoning      string    `json:"reasoning,omitempty"`
 	Tools          []string  `json:"tools,omitempty"`

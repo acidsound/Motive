@@ -18,6 +18,12 @@ func TestDefaultKeymap(t *testing.T) {
 	if k.Help != "ctrl+/" {
 		t.Errorf("Help = %q, want ctrl+/", k.Help)
 	}
+	if k.Stop != "esc" {
+		t.Errorf("Stop = %q, want esc", k.Stop)
+	}
+	if k.CycleQueueMode != "ctrl+\\" {
+		t.Errorf("CycleQueueMode = %q, want ctrl+\\", k.CycleQueueMode)
+	}
 }
 
 func TestKeymapApplyEnv(t *testing.T) {
@@ -44,5 +50,18 @@ func TestKeymapHelpEnv(t *testing.T) {
 	k.ApplyEnv()
 	if k.Help != "f1" {
 		t.Errorf("Help = %q, want f1 override", k.Help)
+	}
+}
+
+func TestKeymapStopAndQueueModeEnv(t *testing.T) {
+	t.Setenv("MOTIVE_KEY_STOP", "ctrl+s")
+	t.Setenv("MOTIVE_KEY_CYCLE_QUEUE_MODE", "ctrl+q")
+	k := DefaultKeymap()
+	k.ApplyEnv()
+	if k.Stop != "ctrl+s" {
+		t.Errorf("Stop = %q, want ctrl+s override", k.Stop)
+	}
+	if k.CycleQueueMode != "ctrl+q" {
+		t.Errorf("CycleQueueMode = %q, want ctrl+q override", k.CycleQueueMode)
 	}
 }

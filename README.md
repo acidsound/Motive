@@ -78,19 +78,31 @@ single "default" provider.
 
 The TUI streams model output live with reasoning shown dimmed, renders
 lightweight markdown, and persists every turn to a JSONL session file that
-`-r` can resume. Controls (rebindable via `MOTIVE_KEY_<NAME>`, e.g.
+`-r` can resume. While a run is in progress:
+
+- `esc` stops the run: the in-flight request is canceled, the partial output
+  is persisted, and a `stopped` entry is recorded in the transcript.
+- `enter` submits to the running execution. The enter mode is cycled with
+  `ctrl+\`: **steer** injects the message into the run at the next step
+  boundary (after tool results, or instead of finishing); **queue** appends
+  it to a FIFO that is processed as fresh turns after the current one ends.
+- `ctrl+c` quits; while busy it stops the run first so the partial output is
+  persisted before exit.
+
+Controls (rebindable via `MOTIVE_KEY_<NAME>`, e.g.
 `MOTIVE_KEY_SCROLL_UP=ctrl+u`):
 
 ```text
-enter          run            ctrl+e         cycle reasoning effort
-shift+enter    newline        ctrl+r         session picker
-ctrl+d         git diff view  ctrl+t         toggle tools
-ctrl+/         toggle help
-ctrl+k / ctrl+j              scroll up / down
-ctrl+shift+k / ctrl+shift+j  page up / down
+enter          run (busy: steer/queue)   ctrl+e   cycle reasoning effort
+shift+enter    newline                   ctrl+r   session picker
+ctrl+d         git diff view             ctrl+t   toggle tools
+ctrl+\         cycle steer/queue (busy)  ctrl+/   toggle help
+ctrl+k / ctrl+j                         scroll up / down
+ctrl+shift+k / ctrl+shift+j             page up / down
 up / down           prompt history (empty input)
-ctrl+g         bookmark       ctrl+l         clear transcript
-esc / ctrl+c   quit
+ctrl+g         bookmark                  ctrl+l   clear transcript
+esc            stop run (busy) / close help
+ctrl+c         quit
 ```
 
 ## Tools exposed to the model
