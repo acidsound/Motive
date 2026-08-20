@@ -16,7 +16,7 @@ import (
 // truth for the budget knobs; Load resolves them into Config and the runtime
 // enforces the caps on every run.
 const (
-	DefaultMaxSteps         = 32
+	DefaultMaxSteps         = 64
 	DefaultMaxMinutes       = 30
 	DefaultMaxToolCalls     = 128
 	MaxAllowedSteps         = 256

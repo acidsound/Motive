@@ -54,7 +54,7 @@ state_dir = "~/.motive"        # session storage        (MOTIVE_STATE_DIR)
 workspace = "."                # workspace root         (MOTIVE_WORKSPACE); empty = cwd
 
 # Execution budget (all optional, capped at hard maximums)
-max_steps = 32                 # MOTIVE_MAX_STEPS
+max_steps = 64                 # MOTIVE_MAX_STEPS
 execution_minutes = 30         # MOTIVE_EXECUTION_MINUTES
 max_tool_calls = 128           # MOTIVE_MAX_TOOL_CALLS
 max_context_tokens = 0         # MOTIVE_MAX_CONTEXT_TOKENS; 0 = no limit
@@ -94,7 +94,7 @@ config file, the environment variables form a single "default" provider.
 | `MOTIVE_MAX_TOKENS` | `max_tokens` | `0` (no limit) |
 | `MOTIVE_WORKSPACE` | `workspace` | current directory |
 | `MOTIVE_STATE_DIR` | `state_dir` | `~/.motive` |
-| `MOTIVE_MAX_STEPS` | `max_steps` | `32` |
+| `MOTIVE_MAX_STEPS` | `max_steps` | `64` |
 | `MOTIVE_EXECUTION_MINUTES` | `execution_minutes` | `30` |
 | `MOTIVE_MAX_TOOL_CALLS` | `max_tool_calls` | `128` |
 | `MOTIVE_MAX_CONTEXT_TOKENS` | `max_context_tokens` | `0` (no limit) |

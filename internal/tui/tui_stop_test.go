@@ -233,7 +233,7 @@ func TestPersistStoppedIdempotent(t *testing.T) {
 	m.appendMessage(message{role: "user", content: "hello"})
 	m.appendMessage(message{role: "assistant", content: "partial"})
 
-	m.persistStopped() // e.g. from the quit path
+	m.persistStopped()                                        // e.g. from the quit path
 	m2, _ := m.finishTurn(doneMsg{text: "", err: errNetwork}) // racing settle
 	m = *m2.(*model)
 

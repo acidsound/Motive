@@ -164,7 +164,7 @@ The semantic meaning of a particular temperature value remains that of the under
 
 ## 11. Execution budget and termination
 
-Every execution has three bounded resources: maximum model/tool-loop steps, maximum elapsed duration, and maximum tool calls. The defaults are 32 steps, 30 minutes, and 128 tool calls. **[SOURCE]**
+Every execution has three bounded resources: maximum model/tool-loop steps, maximum elapsed duration, and maximum tool calls. The defaults are 64 steps, 30 minutes, and 128 tool calls. **[SOURCE]**
 
 Runtime configuration is clamped to hard upper bounds of 256 steps, 120 minutes, and 1024 tool calls. **[SOURCE]**
 
