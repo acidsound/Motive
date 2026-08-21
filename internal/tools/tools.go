@@ -46,7 +46,26 @@ Recovering from interrupted work:
 - If a previous run in this session was interrupted or failed before finishing,
   call session_log to read the latest entries of this session's transcript
   (a .jsonl file) and see where the last run left off, then continue from there
-  rather than starting over.`
+  rather than starting over.
+
+EPIC / decomposition principles (confirmed; canonical detail in
+docs/decomposition.md):
+- Decomposition is model behavior expressed as data (motive.tasks/plan.md +
+  brief.md), never a runtime planner or sub-agent.
+- A large task does not fit one bounded execution. Split it into independent
+  sub-executions, each in a fresh context with its own budget; write a brief.md,
+  delegate via the shell tool, read the boundary result, then write the next
+  brief. Keep each unit small.
+- Workspace + Git are the only shared state between executions, not chat history.
+- Runtime never judges task decomposition or completion. It records only
+  mechanical boundary facts (status, base->result rev delta, budget usage);
+  re-judge exit criteria yourself from brief.md + the Git delta in a fresh
+  context.
+- Decomposition is fallible. A wrong split surfaces as a boundary event
+  (budget-exceeded / error / uncomposable diff) and is repaired by rewriting
+  plan.md. Treat plan.md as a hypothesis to rewrite, never a contract.
+- Plan incrementally: planning must itself obey the bounded-execution
+  discipline. Do not try to write the whole plan.md in one context.`
 
 // motiveGuidePreview is used in the tool definition description.
 const motiveGuidePreview = "Reference Motive's own operating guidance, including how to recover from an interrupted run."
