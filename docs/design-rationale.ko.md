@@ -175,7 +175,7 @@ Track B (decomposition):       여러 독립 실행으로 분할
 Motive는 **Track B**를 선택했습니다.  
 그 이유는 EPIC(큰 작업)이 아무리 잘 압축된 한 컨텍스트에도 맞지 않기 때문입니다.
 
-**[SOURCE: docs/model-delegated-decomposition.md §2]**
+**[SOURCE: docs/decomposition.md §2]**
 
 ### 6.2 Compaction의 구체적 문제점
 
@@ -201,7 +201,7 @@ Motive는 **Track B**를 선택했습니다.
 - 자체 세션
 
 유닛 간 조정은 워크스페이스 + Git delta를 통해 이루어집니다.  
-이것이 `docs/epic-boundary-protocol.md`의 핵심입니다.
+이것이 `docs/decomposition.md`의 핵심입니다.
 
 ### 6.4 Fresh 재판단이 Stale 요약보다 낫다
 
@@ -318,7 +318,7 @@ Runtime은 각 스텝 전에 컨텍스트 추정 토큰 수를 계산합니다:
 
 - **분해(Decomposition)**: EPIC boundary protocol 구현으로 대형 작업 처리.
 
-**[SOURCE: docs/model-delegated-decomposition.md, docs/epic-boundary-protocol.md]**
+**[SOURCE: docs/decomposition.md]**
 
 ---
 
@@ -329,7 +329,7 @@ Runtime은 각 스텝 전에 컨텍스트 추정 토큰 수를 계산합니다:
 | **Stateless context** | 재현성, 오염 방지, 확장성 | runtime.go Execute |
 | **Workspace + Git = 영속 상태** | 파일과 revision이 유일한 진짜 상태 | stable-semantics.md §3 |
 | **No agent framework** | 모델이 최고의 플래너, 추가 계층은 장애 지점 | runtime.go, systemPrompt |
-| **No compaction** | Track B (fresh context per unit)가 근원 해결 | model-delegated-decomposition.md §2 |
+| **No compaction** | Track B (fresh context per unit)가 근원 해결 | docs/decomposition.md §2 |
 | **Runtime observation** | 모델이 자신의 실행을 인식해야 최적화 가능 | runtime.go Observation.Format |
 | **Session = transcript** | 컨텍스트 대신 기록, 재구성보다 재판단 | session.go |
 | **Bounded execution** | 안전 경계, 모델의 추론 예산과 분리 | runtime.go, config.go |

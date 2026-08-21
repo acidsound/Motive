@@ -159,7 +159,7 @@ stop still continues with any queued turns that were submitted before it.
 - `list_files`, `glob`, `search_files`
 - `shell`
 - `web_search`, `web_fetch`
-- `git_status`, `git_diff`
+- `git_status`, `git_diff`, `git_log`
 
 The tool set is intentionally concrete. There is no planner, sub-agent layer, memory manager, or plugin registry in the execution path.
 
@@ -175,8 +175,8 @@ See [docs/design-rationale.md](docs/design-rationale.md) (English) / [docs/desig
 ## Design docs
 
 - [docs/stable-semantics.md](docs/stable-semantics.md) — canonical semantics of the current implementation.
-- [docs/model-delegated-decomposition.md](docs/model-delegated-decomposition.md) — EPIC decomposition protocol (working hypothesis).
-- [docs/epic-boundary-protocol.md](docs/epic-boundary-protocol.md) — runtime mapping of the decomposition protocol (Form 1 candidate).
+- [docs/decomposition.md](docs/decomposition.md) — model-delegated decomposition and unit boundary protocol (Form 0, realized in code).
+- [docs/experiment-form0.md](docs/experiment-form0.md) — the Form 0 decomposition experiment record.
 
 ## Status
 

@@ -174,7 +174,7 @@ Track B (decomposition):      split into multiple independent executions
 Motive chose **Track B**.
 An EPIC task does not fit in a single context, no matter how well compressed.
 
-**[SOURCE: docs/model-delegated-decomposition.md §2]**
+**[SOURCE: docs/decomposition.md §2]**
 
 ### 6.2 Concrete problems with compaction
 
@@ -201,7 +201,7 @@ Large tasks are split into **multiple fresh contexts**. Each unit has:
 - its own session
 
 Coordination between units happens through the workspace + Git delta.
-This is the core of `docs/epic-boundary-protocol.md`.
+This is the core of `docs/decomposition.md`.
 
 ### 6.4 Fresh re-judgment beats stale summaries
 
@@ -320,7 +320,7 @@ This is a safety boundary, not a model reasoning budget.
 
 - **Decomposition**: handle large tasks via the EPIC boundary protocol.
 
-**[SOURCE: docs/model-delegated-decomposition.md, docs/epic-boundary-protocol.md]**
+**[SOURCE: docs/decomposition.md]**
 
 ---
 
@@ -331,7 +331,7 @@ This is a safety boundary, not a model reasoning budget.
 | **Stateless context** | reproducibility, contamination prevention, scalability | runtime.go Execute |
 | **Workspace + Git = persistent state** | files and revisions are the only real state | stable-semantics.md §3 |
 | **No agent framework** | the model is the best planner; extra layers are failure points | runtime.go, systemPrompt |
-| **No compaction** | Track B (fresh context per unit) is the root solution | model-delegated-decomposition.md §2 |
+| **No compaction** | Track B (fresh context per unit) is the root solution | docs/decomposition.md §2 |
 | **Runtime observation** | the model must perceive its own execution to optimize it | runtime.go Observation.Format |
 | **Session = transcript** | a record instead of context; re-judge rather than reconstruct | session.go |
 | **Bounded execution** | safety boundary, separate from the model's reasoning budget | runtime.go, config.go |

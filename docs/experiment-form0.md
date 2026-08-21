@@ -93,7 +93,7 @@ is set before execution), and the TUI picker lists unit sessions.
 ## Overall Verdict
 
 **3 of 4 conditions were demonstrated in a real run** (C2, C3, C4; C1 partially).  
-Per the agreement in `docs/model-delegated-decomposition.md` §6:
+Per the agreement in `docs/decomposition.md` §9:
 
 > Form 1 is justified only if **at least one** of these is demonstrated.
 
@@ -109,6 +109,10 @@ justification is **C2** (structured base→result rev delta in the parent's cont
 which the experiment showed is real but small (one extra `git` command per unit). The
 case for Form 1 is now weak: the sharpest demonstrated conditions are closed without
 it, and its remaining value is a convenience improvement, not a loss recovery.
+
+**Decision (final):** Form 0 is the selected and implemented form. C2 is deferred, not
+pursued with an `execute_unit` tool. The merged, current specification lives in
+`docs/decomposition.md`; this file is retained as the historical experiment record.
 
 ## Recommendations
 
