@@ -84,6 +84,7 @@ func Definitions() []model.Tool {
 		{Type: "function", Function: model.ToolFunction{Name: "web_fetch", Description: "Fetch a single http(s) URL and return its text content. Normalises HTML, plain text, and PDF to text. Does not run JavaScript, crawl links, or return binary data.", Parameters: obj(map[string]model.ToolProperty{"url": {Type: "string"}}, "url")}},
 		{Type: "function", Function: model.ToolFunction{Name: "git_status", Description: "Show Git branch, revision and working-tree changes.", Parameters: obj(map[string]model.ToolProperty{})}},
 		{Type: "function", Function: model.ToolFunction{Name: "git_diff", Description: "Show the current unstaged Git diff.", Parameters: obj(map[string]model.ToolProperty{})}},
+		{Type: "function", Function: model.ToolFunction{Name: "git_log", Description: "Show the last n commit summaries, newest first (bounded to 1..50).", Parameters: obj(map[string]model.ToolProperty{"n": {Type: "integer", Description: "Number of commits to show (default 10, clamped to 1..50)"}}, "n")}},
 		{Type: "function", Function: model.ToolFunction{Name: "session_log", Description: "Read the last N entries of the current session's .jsonl transcript so you can recover from an interrupted run.", Parameters: obj(map[string]model.ToolProperty{"lines": {Type: "integer", Description: "Number of trailing transcript entries to return (default 5, max 20)"}})}},
 		{Type: "function", Function: model.ToolFunction{Name: "motive", Description: motiveGuidePreview, Parameters: obj(map[string]model.ToolProperty{})}},
 	}
@@ -138,6 +139,8 @@ func (e *Executor) Run(ctx context.Context, name, raw string) (string, error) {
 		result, err = e.WS.GitStatusContext(ctx)
 	case "git_diff":
 		result, err = e.WS.GitDiffContext(ctx)
+	case "git_log":
+		result, err = e.WS.GitLogContext(ctx, intArg("n", 10))
 	case "session_log":
 		result, err = e.sessionLog(intArg("lines", 5))
 	case "motive":

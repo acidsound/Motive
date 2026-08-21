@@ -10,6 +10,7 @@ import (
 	"os/exec"
 	"path/filepath"
 	"runtime"
+	"strconv"
 	"strings"
 	"time"
 )
@@ -407,6 +408,22 @@ func (w *Workspace) GitDiff() (string, error) {
 
 func (w *Workspace) GitDiffContext(ctx context.Context) (string, error) {
 	return w.command(ctx, 20*time.Second, "git", "diff", "--no-ext-diff", "--")
+}
+
+// GitLog returns the last n commit summaries, newest first. The count is
+// clamped to [1, 50] so the result is bounded.
+func (w *Workspace) GitLog(n int) (string, error) {
+	return w.GitLogContext(context.Background(), n)
+}
+
+func (w *Workspace) GitLogContext(ctx context.Context, n int) (string, error) {
+	if n < 1 {
+		n = 1
+	}
+	if n > 50 {
+		n = 50
+	}
+	return w.command(ctx, 10*time.Second, "git", "log", "--oneline", "-n", strconv.Itoa(n))
 }
 
 func (w *Workspace) GitHEAD() string {

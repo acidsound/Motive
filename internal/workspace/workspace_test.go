@@ -44,6 +44,104 @@ func TestSearchMatch(t *testing.T) {
 	}
 }
 
+// gitTestRepo initialises a temp git repo, sets an identity, writes the given
+// files (one commit per file) and returns the repo directory. It skips the test
+// when git is unavailable.
+func gitTestRepo(t *testing.T, files map[string]string) string {
+	t.Helper()
+	dir := t.TempDir()
+	if out, err := exec.Command("git", "init", "-q", dir).CombinedOutput(); err != nil {
+		t.Skipf("git not available: %v (%s)", err, strings.TrimSpace(string(out)))
+	}
+	if out, err := exec.Command("git", "-C", dir, "config", "user.email", "test@example.com").CombinedOutput(); err != nil {
+		t.Fatalf("set user.email: %v (%s)", err, strings.TrimSpace(string(out)))
+	}
+	if out, err := exec.Command("git", "-C", dir, "config", "user.name", "Test User").CombinedOutput(); err != nil {
+		t.Fatalf("set user.name: %v (%s)", err, strings.TrimSpace(string(out)))
+	}
+	for name, content := range files {
+		p := filepath.Join(dir, filepath.FromSlash(name))
+		if err := os.MkdirAll(filepath.Dir(p), 0o755); err != nil {
+			t.Fatal(err)
+		}
+		if err := os.WriteFile(p, []byte(content), 0o644); err != nil {
+			t.Fatal(err)
+		}
+		if out, err := exec.Command("git", "-C", dir, "add", name).CombinedOutput(); err != nil {
+			t.Fatalf("git add %s: %v (%s)", name, err, strings.TrimSpace(string(out)))
+		}
+		if out, err := exec.Command("git", "-C", dir, "commit", "-q", "-m", "commit "+name).CombinedOutput(); err != nil {
+			t.Fatalf("git commit %s: %v (%s)", name, err, strings.TrimSpace(string(out)))
+		}
+	}
+	return dir
+}
+
+func TestGitLogBounded(t *testing.T) {
+	dir := gitTestRepo(t, map[string]string{
+		"a.txt": "a",
+		"b.txt": "b",
+		"c.txt": "c",
+	})
+	w := New(dir)
+	out, err := w.GitLog(50)
+	if err != nil {
+		t.Fatalf("GitLog: %v", err)
+	}
+	for _, want := range []string{"commit c.txt", "commit b.txt", "commit a.txt"} {
+		if !strings.Contains(out, want) {
+			t.Errorf("GitLog missing %q; got:\n%s", want, out)
+		}
+	}
+	// newest first: c before a
+	if strings.Index(out, "commit c.txt") > strings.Index(out, "commit a.txt") {
+		t.Errorf("GitLog not newest-first; got:\n%s", out)
+	}
+}
+
+func TestGitLogClampsN(t *testing.T) {
+	dir := gitTestRepo(t, map[string]string{
+		"a.txt": "a",
+		"b.txt": "b",
+		"c.txt": "c",
+	})
+	w := New(dir)
+
+	one, err := w.GitLog(1)
+	if err != nil {
+		t.Fatalf("GitLog(1): %v", err)
+	}
+	zero, err := w.GitLog(0)
+	if err != nil {
+		t.Fatalf("GitLog(0): %v", err)
+	}
+	neg, err := w.GitLog(-5)
+	if err != nil {
+		t.Fatalf("GitLog(-5): %v", err)
+	}
+	if zero != one {
+		t.Errorf("GitLog(0) = %q, want equal to GitLog(1) = %q", zero, one)
+	}
+	if neg != one {
+		t.Errorf("GitLog(-5) = %q, want equal to GitLog(1) = %q", neg, one)
+	}
+	if strings.Count(one, "\n") > 1 {
+		t.Errorf("GitLog(1) output has >1 line; got:\n%s", one)
+	}
+
+	fifty, err := w.GitLog(50)
+	if err != nil {
+		t.Fatalf("GitLog(50): %v", err)
+	}
+	huge, err := w.GitLog(9999)
+	if err != nil {
+		t.Fatalf("GitLog(9999): %v", err)
+	}
+	if huge != fifty {
+		t.Errorf("GitLog(9999) = %q, want equal to GitLog(50) = %q", huge, fifty)
+	}
+}
+
 func TestGitHEADOutsideRepo(t *testing.T) {
 	w := New(t.TempDir())
 	if head := w.GitHEAD(); head != "" {

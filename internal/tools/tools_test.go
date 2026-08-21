@@ -133,6 +133,72 @@ func TestTruncateKeepsValidUTF8(t *testing.T) {
 	}
 }
 
+// gitLogRepo init a git repo in a temp dir with an identity and makes the given
+// commits (one per subject). Skips when git is unavailable.
+func gitLogRepo(t *testing.T, subjects ...string) string {
+	t.Helper()
+	dir := t.TempDir()
+	if out, err := exec.Command("git", "init", "-q", dir).CombinedOutput(); err != nil {
+		t.Skipf("git not available: %v (%s)", err, strings.TrimSpace(string(out)))
+	}
+	if out, err := exec.Command("git", "-C", dir, "config", "user.email", "test@example.com").CombinedOutput(); err != nil {
+		t.Fatalf("set user.email: %v (%s)", err, strings.TrimSpace(string(out)))
+	}
+	if out, err := exec.Command("git", "-C", dir, "config", "user.name", "Test User").CombinedOutput(); err != nil {
+		t.Fatalf("set user.name: %v (%s)", err, strings.TrimSpace(string(out)))
+	}
+	for i, subject := range subjects {
+		name := "f" + string(rune('a'+i)) + ".txt"
+		p := filepath.Join(dir, name)
+		if err := os.WriteFile(p, []byte(subject), 0o644); err != nil {
+			t.Fatal(err)
+		}
+		if out, err := exec.Command("git", "-C", dir, "add", name).CombinedOutput(); err != nil {
+			t.Fatalf("git add %s: %v (%s)", name, err, strings.TrimSpace(string(out)))
+		}
+		if out, err := exec.Command("git", "-C", dir, "commit", "-q", "-m", subject).CombinedOutput(); err != nil {
+			t.Fatalf("git commit %s: %v (%s)", subject, err, strings.TrimSpace(string(out)))
+		}
+	}
+	return dir
+}
+
+func TestGitLogTool(t *testing.T) {
+	dir := gitLogRepo(t, "first commit", "second commit")
+	e := &Executor{WS: workspace.New(dir)}
+	out, err := e.Run(context.Background(), "git_log", `{"n":2}`)
+	if err != nil {
+		t.Fatalf("git_log: %v", err)
+	}
+	for _, want := range []string{"first commit", "second commit"} {
+		if !strings.Contains(out, want) {
+			t.Errorf("git_log output missing %q; got:\n%s", want, out)
+		}
+	}
+}
+
+func TestGitLogToolDefault(t *testing.T) {
+	dir := gitLogRepo(t, "first commit", "second commit")
+	e := &Executor{WS: workspace.New(dir)}
+	out, err := e.Run(context.Background(), "git_log", "")
+	if err != nil {
+		t.Fatalf("git_log with default args: %v", err)
+	}
+	for _, want := range []string{"first commit", "second commit"} {
+		if !strings.Contains(out, want) {
+			t.Errorf("git_log default output missing %q; got:\n%s", want, out)
+		}
+	}
+}
+
+func TestGitLogToolInvalidJSON(t *testing.T) {
+	dir := gitLogRepo(t, "first commit")
+	e := &Executor{WS: workspace.New(dir)}
+	if _, err := e.Run(context.Background(), "git_log", "{bad"); err == nil {
+		t.Fatal("expected an error for malformed git_log arguments")
+	}
+}
+
 func TestSessionLogTool(t *testing.T) {
 	e := newExecutor(t)
 	e.SessionID = "sess-1"
