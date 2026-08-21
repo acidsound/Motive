@@ -53,6 +53,21 @@ The unit did not write a `result.md` note (as it would need to anticipate the er
 
 **Verdict: condition met.** This is the strongest argument for Form 1.
 
+**Follow-up (closed):** the intent loss was closed with a minimal 3-layer change —
+no `execute_unit` tool, no session machinery:
+1. **Runtime** (`internal/runtime/runtime.go`): every error path now returns the
+   accumulated assistant text (`strings.Join(trace, "\n\n")`) instead of discarding
+   it; the same text lands in the boundary record's `text` field.
+2. **CLI** (`cmd/motive/main.go`): on failure the partial text is delivered in-band
+   on stderr after the error line, so a parent receives the unit's own narrative.
+3. **Protocol** (system prompt): units are asked to state what remains alongside
+   their final tool call, so the *never-emitted* half of the loss is spoken before
+   the cap.
+
+`TestExecuteBudgetExceededPreservesTrace` reproduces the 0002 case (MaxSteps=1, tool
+call in flight) and asserts the forward intent survives. The crash-before-any-message
+case still needs a session (Form 1 territory); the demonstrated case is fully closed.
+
 ### C4. Telemetry continuity
 
 **Demonstrated.** The one-shot CLI creates no session. Verified:
@@ -64,6 +79,17 @@ For the "self-observation" requirement (`stable-semantics.md` §20.1), this is a
 
 **Verdict: condition met.**
 
+**Follow-up (closed):** one-shot runs now create their own session and append a
+runtime-written boundary record (`role: "unit"`, one compact JSON line: status,
+base→result rev, steps / tool calls / failures, elapsed, text, error). The session
+id is printed in-band on stderr (`[motive] unit session: <id>`), and `session_log`
+accepts an explicit `session_id`, so a parent execution can read any sub-execution's
+boundary record directly — sub-executions are no longer invisible. Verified live on
+the model-error path (model server unreachable): the unit session file contained the
+request entry plus the `unit` boundary entry with `"status":"error"` and the
+connection-error detail. The unit's own `session_log` also works now (its session id
+is set before execution), and the TUI picker lists unit sessions.
+
 ## Overall Verdict
 
 **3 of 4 conditions were demonstrated in a real run** (C2, C3, C4; C1 partially).  
@@ -71,18 +97,26 @@ Per the agreement in `docs/model-delegated-decomposition.md` §6:
 
 > Form 1 is justified only if **at least one** of these is demonstrated.
 
-The "at least one" bar is met. The strongest case is **C3 (forward intent loss)**, which is the "sharpest condition: a hard fact, not a soft judgment."
+The "at least one" bar is met. The strongest case was **C3 (forward intent loss)**, the "sharpest condition: a hard fact, not a soft judgment."
 
-However, the experiment also showed that the reconstitution protocol **works** — the fresh execution correctly re-judged the state from Git delta + brief + boundary status. The overhead is real but bounded. The case for Form 1 is not overwhelming; it depends on how much the lost forward intent matters in practice.
+However, the experiment also showed that the reconstitution protocol **works** — the fresh execution correctly re-judged the state from Git delta + brief + boundary status. The overhead is real but bounded.
+
+**Post-experiment update:** C3 and C4 have since been **closed by minimal runtime
+changes that do not add `execute_unit`** (see the follow-ups above): forward intent
+survives via error-path text delivery, and unit boundaries are durable telemetry via
+per-unit sessions with a structured `role: "unit"` record. What remains of the Form 1
+justification is **C2** (structured base→result rev delta in the parent's context),
+which the experiment showed is real but small (one extra `git` command per unit). The
+case for Form 1 is now weak: the sharpest demonstrated conditions are closed without
+it, and its remaining value is a convenience improvement, not a loss recovery.
 
 ## Recommendations
 
-1. Decide whether the lost forward intent (C3) is acceptable. If no, implement Form 1 (`execute_unit` tool + structured `unitResult`).
-2. If Form 1 is pursued, the key design targets are:
-   - Structured status: `completed | budget-exceeded | error` + step count + base→result rev.
-   - Session per sub-execution for telemetry continuity and crash recovery.
-   - In-band unit result in the parent's context.
-3. Even without Form 1, the protocol (Git delta + brief + boundary status) enables reconstitution — the overhead is in the parent's budget and the risk of misinterpretation.
+1. **C3 is closed** (error-path text delivery + in-band stderr + system-prompt nudge). No Form 1 needed for it.
+2. **C4 is closed** (per-unit session + runtime-written `role: "unit"` boundary record + `session_log` explicit `session_id`). A parent can read any unit's boundary directly.
+3. **C1 is partially addressed:** the boundary record's structured `status` field removes the parent's need to string-match stderr; the stderr string itself remains the fallback.
+4. Remaining Form 1 justification is **C2** (structured base→result rev delta). Decide later whether the one extra `git` command per unit is worth an `execute_unit` tool; nothing else currently justifies it.
+5. Even without Form 1, the protocol (Git delta + brief + boundary status) enables reconstitution — the overhead is in the parent's budget and the risk of misinterpretation.
 
 ## Files changed (EPIC deliverable)
 
@@ -91,3 +125,21 @@ However, the experiment also showed that the reconstitution protocol **works** �
 - `internal/tools/tools.go` — `git_log` Definitions entry + switch case.
 - `internal/workspace/workspace_test.go` — `TestGitLogBounded`, `TestGitLogClampsN`.
 - `internal/tools/tools_test.go` — `TestGitLogTool`, `TestGitLogToolDefault`, `TestGitLogToolInvalidJSON`.
+
+## Follow-up changes (C3/C4 closures, no `execute_unit`)
+
+- `internal/runtime/runtime.go` — `UnitBoundary` record + sink, `finish()` helper on
+  every termination path (clean/budget/model-error/cancel), error paths return the
+  accumulated assistant text instead of discarding it; system-prompt nudge to state
+  what remains before the cap.
+- `cmd/motive/main.go` — per-run unit session for one-shot executions, in-band
+  `[motive] unit session: <id>` on stderr, boundary entry append, unit's session id
+  exposed to `session_log`.
+- `internal/tools/tools.go` — `session_log` gains optional `session_id`.
+- `internal/session/session.go` — `unit` role documented; boundary JSON kept whole in
+  `FormatEntry` (4000-char limit instead of 80).
+- Tests: `runtime_test.go` (`TestExecuteBudgetExceededPreservesTrace`,
+  `TestExecuteRecordsUnitBoundary`), `tools_test.go` (`TestSessionLogToolExplicitID`),
+  `session_test.go` (`TestFormatEntryUnitBoundaryNotTruncated`).
+- Verified live: model-error path produced a unit session with request entry +
+  boundary entry (`status:"error"`, rev delta, budget usage, error detail).

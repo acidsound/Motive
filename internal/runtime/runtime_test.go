@@ -438,3 +438,130 @@ func TestExecuteSteerExtendsFinishedRun(t *testing.T) {
 		t.Fatalf("output = %q, want both turns", out)
 	}
 }
+
+func TestExecuteBudgetExceededPreservesTrace(t *testing.T) {
+	// C3 (forward intent loss on failure): the model keeps calling tools, the
+	// step budget runs out before a final response. The partial assistant text
+	// — what the unit did and was about to do next — must be returned alongside
+	// the error instead of being discarded.
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Type", "application/json")
+		fmt.Fprint(w, `{"choices":[{"message":{"role":"assistant","content":"implementing git log; next: add tests","tool_calls":[{"id":"call_1","type":"function","function":{"name":"read_file","arguments":"{\"path\":\"README.md\"}"}}]}}]}`)
+	}))
+	defer server.Close()
+
+	dir := t.TempDir()
+	ws := workspace.New(dir)
+	if err := ws.Write("README.md", "test file\n"); err != nil {
+		t.Fatalf("Write: %v", err)
+	}
+
+	rt := &Runtime{
+		Model: &model.Client{
+			BaseURL:         server.URL,
+			Model:           "test",
+			ReasoningEffort: "low",
+			HTTP:            server.Client(),
+		},
+		WS:       ws,
+		Exec:     &tools.Executor{WS: ws},
+		MaxSteps: 1, // deliberate: the cap hits after the first tool call
+		Budget:   ExecutionBudget{MaxSteps: 1, MaxDuration: time.Minute, MaxToolCalls: 8},
+	}
+
+	out, err := rt.Execute(context.Background(), "add the git log tool")
+	if err == nil || !strings.Contains(err.Error(), "budget exceeded") {
+		t.Fatalf("Execute error = %v, want budget exceeded", err)
+	}
+	if !strings.Contains(out, "next: add tests") {
+		t.Fatalf("partial text on error = %q, want forward intent preserved", out)
+	}
+}
+
+func TestExecuteRecordsUnitBoundary(t *testing.T) {
+	// C4 (telemetry continuity): every termination path must produce the
+	// mechanical boundary record — status, revision delta, budget usage, and
+	// best-effort text — so a unit run can be persisted as durable telemetry
+	// even when it never finishes cleanly.
+	response := `{"choices":[{"message":{"role":"assistant","content":"implementing git log; next: add tests","tool_calls":[{"id":"call_1","type":"function","function":{"name":"read_file","arguments":"{\"path\":\"README.md\"}"}}]}}]}`
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Type", "application/json")
+		fmt.Fprint(w, response)
+	}))
+	defer server.Close()
+
+	dir := t.TempDir()
+	ws := workspace.New(dir)
+	if err := ws.Write("README.md", "test file\n"); err != nil {
+		t.Fatalf("Write: %v", err)
+	}
+
+	rt := &Runtime{
+		Model: &model.Client{
+			BaseURL:         server.URL,
+			Model:           "test",
+			ReasoningEffort: "low",
+			HTTP:            server.Client(),
+		},
+		WS:       ws,
+		Exec:     &tools.Executor{WS: ws},
+		MaxSteps: 1, // deliberate: the cap hits after the first tool call
+		Budget:   ExecutionBudget{MaxSteps: 1, MaxDuration: time.Minute, MaxToolCalls: 8},
+	}
+
+	var got UnitBoundary
+	rt.UnitBoundary = func(rec UnitBoundary) { got = rec }
+
+	if _, err := rt.Execute(context.Background(), "add the git log tool"); err == nil {
+		t.Fatal("expected budget-exceeded error")
+	}
+	if got.Status != "budget-exceeded" {
+		t.Errorf("boundary status = %q, want budget-exceeded", got.Status)
+	}
+	if got.Steps != 1 || got.MaxSteps != 1 {
+		t.Errorf("boundary steps = %d/%d, want 1/1", got.Steps, got.MaxSteps)
+	}
+	if got.ToolCalls != 1 || got.MaxToolCalls != 8 {
+		t.Errorf("boundary tool calls = %d/%d, want 1/8", got.ToolCalls, got.MaxToolCalls)
+	}
+	if !strings.Contains(got.Text, "next: add tests") {
+		t.Errorf("boundary text = %q, want forward intent preserved", got.Text)
+	}
+	if !strings.Contains(got.Error, "budget exceeded") {
+		t.Errorf("boundary error = %q, want budget-exceeded message", got.Error)
+	}
+	if !strings.Contains(got.String(), `"status":"budget-exceeded"`) {
+		t.Errorf("boundary JSON = %q, want status field", got.String())
+	}
+
+	// Clean completion must also record a boundary (status=completed).
+	response = `{"choices":[{"message":{"role":"assistant","content":"all done"}}]}`
+	dir2 := t.TempDir()
+	ws2 := workspace.New(dir2)
+	rt2 := &Runtime{
+		Model: &model.Client{
+			BaseURL:         server.URL,
+			Model:           "test",
+			ReasoningEffort: "low",
+			HTTP:            server.Client(),
+		},
+		WS:       ws2,
+		Exec:     &tools.Executor{WS: ws2},
+		MaxSteps: 4,
+		Budget:   ExecutionBudget{MaxSteps: 4, MaxDuration: time.Minute, MaxToolCalls: 8},
+	}
+	var got2 UnitBoundary
+	rt2.UnitBoundary = func(rec UnitBoundary) { got2 = rec }
+	if _, err := rt2.Execute(context.Background(), "done"); err != nil {
+		t.Fatalf("Execute: %v", err)
+	}
+	if got2.Status != "completed" {
+		t.Errorf("clean boundary status = %q, want completed", got2.Status)
+	}
+	if got2.Text != "all done" {
+		t.Errorf("clean boundary text = %q, want final response", got2.Text)
+	}
+	if got2.Error != "" {
+		t.Errorf("clean boundary error = %q, want empty", got2.Error)
+	}
+}

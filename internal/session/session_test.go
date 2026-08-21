@@ -99,11 +99,11 @@ func TestStoreRejectsUnsafeIDs(t *testing.T) {
 
 func TestPreviewTruncation(t *testing.T) {
 	long := strings.Repeat("x", 200)
-	if got := firstLine(long); len([]rune(got)) > 81 {
+	if got := firstLine(long, 80); len([]rune(got)) > 81 {
 		t.Errorf("firstLine runes = %d, want <= 81", len([]rune(got)))
 	}
 	multi := "first line\nsecond line"
-	if got := firstLine(multi); got != "first line" {
+	if got := firstLine(multi, 80); got != "first line" {
 		t.Errorf("firstLine = %q, want first line only", got)
 	}
 }
@@ -151,5 +151,18 @@ func TestFormatEntry(t *testing.T) {
 	}
 	if strings.Contains(got, "\n") {
 		t.Errorf("FormatEntry should be a single line: %q", got)
+	}
+}
+
+func TestFormatEntryUnitBoundaryNotTruncated(t *testing.T) {
+	// A unit boundary record is one compact JSON line; session_log must render
+	// it whole so a parent execution can read status/revs/counts mechanically.
+	long := `{"status":"budget-exceeded","steps":6,"max_steps":6,"tool_calls":5,"max_tool_calls":128,"tool_failures":0,"base_revision":"abc123","result_revision":"def456","elapsed_ms":1234,"text":"implementing git log; next: add tests","error":"execution budget exceeded: 6 steps"}`
+	got := FormatEntry(Entry{Role: "unit", Content: long})
+	if !strings.Contains(got, `"status":"budget-exceeded"`) || !strings.Contains(got, `"text":"implementing git log`) {
+		t.Errorf("unit entry should carry the full boundary JSON: %q", got)
+	}
+	if strings.Contains(got, "…") {
+		t.Errorf("unit boundary JSON was truncated: %q", got)
 	}
 }

@@ -78,9 +78,41 @@ func main() {
 		}
 		return
 	}
+
+	// One-shot runs create a unit session so sub-execution telemetry is
+	// durable (C4 closure). The session id is printed on stderr in-band so
+	// a parent execution can read the boundary record via session_log.
+	unitID := ""
+	if id, err := sess.New(); err == nil {
+		unitID = id
+		fmt.Fprintf(os.Stderr, "[motive] unit session: %s\n", id)
+		_ = sess.Append(id, session.Entry{TS: time.Now(), Role: "user", Content: flag.Arg(0), BaseRevision: rt.WS.GitHEAD()})
+		rt.SessionID = id
+		rt.UnitBoundary = func(rec runtime.UnitBoundary) {
+			if unitID == "" {
+				return
+			}
+			_ = sess.Append(unitID, session.Entry{
+				TS:             time.Now(),
+				Role:           "unit",
+				Content:        rec.String(),
+				BaseRevision:   rec.BaseRevision,
+				ResultRevision: rec.ResultRevision,
+				ElapsedMS:      rec.ElapsedMS,
+			})
+		}
+	}
+
 	result, err := rt.Execute(context.Background(), flag.Arg(0))
 	if err != nil {
 		fmt.Fprintln(os.Stderr, err)
+		// On failure the result holds the unit's partial assistant text —
+		// the forward intent emitted before termination. Deliver it in-band
+		// so a parent execution can reconstitute without re-deriving it.
+		if result != "" {
+			fmt.Fprintln(os.Stderr, "---")
+			fmt.Fprintln(os.Stderr, result)
+		}
 		os.Exit(1)
 	}
 	fmt.Println(result)

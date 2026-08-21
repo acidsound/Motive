@@ -85,7 +85,7 @@ func Definitions() []model.Tool {
 		{Type: "function", Function: model.ToolFunction{Name: "git_status", Description: "Show Git branch, revision and working-tree changes.", Parameters: obj(map[string]model.ToolProperty{})}},
 		{Type: "function", Function: model.ToolFunction{Name: "git_diff", Description: "Show the current unstaged Git diff.", Parameters: obj(map[string]model.ToolProperty{})}},
 		{Type: "function", Function: model.ToolFunction{Name: "git_log", Description: "Show the last n commit summaries, newest first (bounded to 1..50).", Parameters: obj(map[string]model.ToolProperty{"n": {Type: "integer", Description: "Number of commits to show (default 10, clamped to 1..50)"}}, "n")}},
-		{Type: "function", Function: model.ToolFunction{Name: "session_log", Description: "Read the last N entries of the current session's .jsonl transcript so you can recover from an interrupted run.", Parameters: obj(map[string]model.ToolProperty{"lines": {Type: "integer", Description: "Number of trailing transcript entries to return (default 5, max 20)"}})}},
+		{Type: "function", Function: model.ToolFunction{Name: "session_log", Description: "Read the last N entries of a session's .jsonl transcript (default: the current session) so you can recover from an interrupted run or inspect a unit boundary record.", Parameters: obj(map[string]model.ToolProperty{"lines": {Type: "integer", Description: "Number of trailing transcript entries to return (default 5, max 20)"}, "session_id": {Type: "string", Description: "Session id to read; defaults to the current session"}})}},
 		{Type: "function", Function: model.ToolFunction{Name: "motive", Description: motiveGuidePreview, Parameters: obj(map[string]model.ToolProperty{})}},
 	}
 }
@@ -142,7 +142,7 @@ func (e *Executor) Run(ctx context.Context, name, raw string) (string, error) {
 	case "git_log":
 		result, err = e.WS.GitLogContext(ctx, intArg("n", 10))
 	case "session_log":
-		result, err = e.sessionLog(intArg("lines", 5))
+		result, err = e.sessionLog(str("session_id"), intArg("lines", 5))
 	case "motive":
 		result = motiveGuide
 	default:
@@ -158,11 +158,17 @@ func (e *Executor) Run(ctx context.Context, name, raw string) (string, error) {
 	return Truncate(result), nil
 }
 
-func (e *Executor) sessionLog(lines int) (string, error) {
+// sessionLog returns the tail of the given session transcript, defaulting to
+// the active session when id is empty. Passing an explicit id lets a parent
+// execution read a sub-execution's transcript (unit boundary record) directly.
+func (e *Executor) sessionLog(id string, lines int) (string, error) {
 	if e.SessionLog == nil {
 		return "", fmt.Errorf("no session log available (run without a session)")
 	}
-	if e.SessionID == "" {
+	if id == "" {
+		id = e.SessionID
+	}
+	if id == "" {
 		return "", fmt.Errorf("no active session id")
 	}
 	if lines <= 0 {
@@ -171,7 +177,7 @@ func (e *Executor) sessionLog(lines int) (string, error) {
 	if lines > 20 {
 		lines = 20
 	}
-	return e.SessionLog(e.SessionID, lines)
+	return e.SessionLog(id, lines)
 }
 
 func (e *Executor) readFile(ctx context.Context, path string) (string, error) {

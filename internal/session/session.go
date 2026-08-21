@@ -14,14 +14,17 @@ import (
 )
 
 // Entry is one persisted transcript line: a user request, an assistant reply,
-// a tool line, an error, or a user stop.
+// a tool line, an error, a user stop, or a unit boundary record.
 //
-// "stopped" is a Motive transcript role, not a chat API role: it must never
-// be sent to a model as a message role. The transcript is model-visible only
-// through the session_log tool, which renders entries as plain text.
+// "stopped" and "unit" are Motive transcript roles, not chat API roles: they
+// must never be sent to a model as message roles. The transcript is
+// model-visible only through the session_log tool, which renders entries as
+// plain text. A "unit" entry is the runtime-written mechanical boundary record
+// (status, revision delta, budget usage) of a one-shot execution; its Content
+// is one compact JSON line.
 type Entry struct {
 	TS             time.Time `json:"ts"`
-	Role           string    `json:"role"` // user | assistant | error | tool | stopped
+	Role           string    `json:"role"` // user | assistant | error | tool | stopped | unit
 	Content        string    `json:"content,omitempty"`
 	Reasoning      string    `json:"reasoning,omitempty"`
 	Tools          []string  `json:"tools,omitempty"`
@@ -157,7 +160,7 @@ func (s *Store) summarize(id string, de os.DirEntry) (Summary, error) {
 			sum.Updated = e.TS
 		}
 		if sum.Preview == "" && e.Role == "user" {
-			sum.Preview = firstLine(e.Content)
+			sum.Preview = firstLine(e.Content, 80)
 		}
 	}
 	if err := sc.Err(); err != nil {
@@ -204,9 +207,14 @@ func (s *Store) Load(id string) ([]Entry, error) {
 }
 
 // FormatEntry renders a single transcript entry as a compact, model-visible
-// line. Content is truncated so a tail of many entries stays small.
+// line. Content is truncated so a tail of many entries stays small; unit
+// boundary records keep a much larger limit so their JSON is machine-readable.
 func FormatEntry(e Entry) string {
-	content := firstLine(e.Content)
+	limit := 80
+	if e.Role == "unit" {
+		limit = 4000
+	}
+	content := firstLine(e.Content, limit)
 	if e.Role == "assistant" && len(e.Tools) > 0 {
 		tools := strings.Join(e.Tools, ", ")
 		if content == "" {
@@ -222,15 +230,15 @@ func FormatEntry(e Entry) string {
 	return fmt.Sprintf("%s %s: %s", ts, e.Role, content)
 }
 
-func firstLine(s string) string {
+func firstLine(s string, limit int) string {
 	s = strings.TrimSpace(s)
 	if i := strings.IndexByte(s, '\n'); i >= 0 {
 		s = s[:i]
 	}
 	s = strings.TrimSpace(s)
 	r := []rune(s)
-	if len(r) > 80 {
-		return string(r[:80]) + "…"
+	if len(r) > limit {
+		return string(r[:limit]) + "…"
 	}
 	return s
 }

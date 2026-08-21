@@ -14,7 +14,7 @@ import (
 	"github.com/acidsound/Motive/internal/workspace"
 )
 
-const systemPrompt = `You are Motive, a model-centric software execution runtime. Work directly on the user's workspace instead of merely describing code. Each user request is an independent execution request: do not assume unseen chat history. Inspect the workspace when needed, use tools decisively, make concrete file changes when asked, run tests or builds when useful, and report what actually happened. Prefer the smallest relevant context and avoid reading unrelated files. You may use shell, filesystem, web search, and git tools. When modifying the workspace, verify the resulting state before claiming success; never claim a commit, push, test, or build unless tool output confirms it.`
+const systemPrompt = `You are Motive, a model-centric software execution runtime. Work directly on the user's workspace instead of merely describing code. Each user request is an independent execution request: do not assume unseen chat history. Inspect the workspace when needed, use tools decisively, make concrete file changes when asked, run tests or builds when useful, and report what actually happened. Prefer the smallest relevant context and avoid reading unrelated files. You may use shell, filesystem, web search, and git tools. When modifying the workspace, verify the resulting state before claiming success; never claim a commit, push, test, or build unless tool output confirms it. Each execution is budget-bounded: when you are near the step or tool budget, put a one-line statement of what remains and where to continue in your assistant message alongside your last tool call, so a budget cap does not lose your forward intent.`
 
 type TraceEvent struct {
 	Kind                 string
@@ -24,6 +24,8 @@ type TraceEvent struct {
 	ToolName             string
 	ToolCalls            int
 	TotalToolCalls       int
+	MaxToolCalls         int
+	ToolFailures         int
 	ToolResultBytes      int
 	RequestBytes         int
 	EstimatedInputTokens int
@@ -47,6 +49,34 @@ type ExecutionBudget struct {
 	MaxSteps     int
 	MaxDuration  time.Duration
 	MaxToolCalls int
+}
+
+// UnitBoundary is the mechanical, runtime-written record of one bounded
+// execution (a unit): status, revision delta, and budget usage. It carries
+// only facts the runtime can observe — task-level judgment (exit criteria,
+// coherence with the plan) stays with the model. On failure, Text holds the
+// best-effort partial assistant text, so forward intent survives the boundary.
+type UnitBoundary struct {
+	Status         string `json:"status"` // completed | budget-exceeded | error
+	Steps          int    `json:"steps"`
+	MaxSteps       int    `json:"max_steps"`
+	ToolCalls      int    `json:"tool_calls"`
+	MaxToolCalls   int    `json:"max_tool_calls"`
+	ToolFailures   int    `json:"tool_failures"`
+	BaseRevision   string `json:"base_revision,omitempty"`
+	ResultRevision string `json:"result_revision,omitempty"`
+	ElapsedMS      int64  `json:"elapsed_ms,omitempty"`
+	Text           string `json:"text,omitempty"` // final response, or partial text on failure
+	Error          string `json:"error,omitempty"`
+}
+
+// String renders the record as one compact JSON line for a boundary entry.
+func (u UnitBoundary) String() string {
+	b, err := json.Marshal(u)
+	if err != nil {
+		return fmt.Sprintf(`{"status":%q}`, u.Status)
+	}
+	return string(b)
 }
 
 type Observation struct {
@@ -174,6 +204,11 @@ type Runtime struct {
 	// a failure look at what happened last and continue instead of restarting.
 	// When nil, the session_log tool reports that no log is available.
 	SessionLog func(sessionID string, lines int) (string, error)
+	// UnitBoundary is called once per execution with the mechanical boundary
+	// record (status, revision delta, budget usage). The one-shot CLI wires it
+	// so every unit run is persisted as durable telemetry; nil disables it
+	// (TUI runs persist a full transcript already).
+	UnitBoundary func(UnitBoundary)
 	// Steer receives user messages that are injected into a running execution
 	// at the next step boundary (after tool results, or instead of finishing).
 	// Set by the TUI; nil disables steering (one-shot CLI runs).
@@ -260,10 +295,48 @@ func (r *Runtime) emit(event TraceEvent) {
 	}
 }
 
-// Execute runs a fresh execution and returns the final assistant text. If the
-// run is interrupted by a model/network failure, no in-memory state is carried
-// across calls; the caller can re-run and the model recovers by reading the
-// session transcript through the session_log tool.
+// finish terminates an execution: it emits the finish trace event and, when a
+// UnitBoundary sink is wired, records the mechanical boundary facts. text is
+// the final assistant text on success or the best-effort partial text on
+// failure. Every termination path (clean, budget, model error, cancel) must
+// return through this helper so no boundary is ever skipped.
+func (r *Runtime) finish(event TraceEvent, text string, err error) (string, error) {
+	r.emit(event)
+	if r.UnitBoundary != nil {
+		status := "completed"
+		if err != nil {
+			status = "error"
+			if strings.Contains(err.Error(), "budget exceeded") {
+				status = "budget-exceeded"
+			}
+		}
+		rec := UnitBoundary{
+			Status:         status,
+			Steps:          event.Step,
+			MaxSteps:       event.MaxSteps,
+			ToolCalls:      event.TotalToolCalls,
+			MaxToolCalls:   event.MaxToolCalls,
+			ToolFailures:   event.ToolFailures,
+			BaseRevision:   event.BaseRevision,
+			ResultRevision: event.ResultRevision,
+			ElapsedMS:      event.TotalElapsed.Milliseconds(),
+			Text:           text,
+		}
+		if err != nil {
+			rec.Error = err.Error()
+		}
+		r.UnitBoundary(rec)
+	}
+	return text, err
+}
+
+// Execute runs a fresh execution and returns the final assistant text. On any
+// error path the returned text is best-effort partial content: the assistant
+// messages emitted before termination, so forward intent (what the unit did and
+// what it was about to do) survives budget caps and model failures. If the run
+// dies before emitting anything, no in-memory state is carried across calls;
+// the caller can re-run and the model recovers by reading the session transcript
+// through the session_log tool.
 func (r *Runtime) Execute(ctx context.Context, request string) (string, error) {
 	if strings.TrimSpace(request) == "" {
 		return "", fmt.Errorf("request is empty")
@@ -310,8 +383,7 @@ func (r *Runtime) Execute(ctx context.Context, request string) (string, error) {
 
 	for step := 0; step < budget.MaxSteps; step++ {
 		if err := ctx.Err(); err != nil {
-			r.emit(TraceEvent{Kind: "finish", Step: step + 1, MaxSteps: budget.MaxSteps, TotalToolCalls: obs.ToolCalls, ContextTokens: ctxAcc.LastRequest, PeakContextTokens: ctxAcc.PeakRequest, MaxContextTokens: r.MaxContextTokens, ServerPromptN: ctxAcc.ServerPromptN, TotalElapsed: time.Since(started), ReasoningEffort: effort, BaseRevision: baseRevision, ResultRevision: r.WS.GitHEAD(), Error: err})
-			return "", err
+			return r.finish(TraceEvent{Kind: "finish", Step: step + 1, MaxSteps: budget.MaxSteps, TotalToolCalls: obs.ToolCalls, MaxToolCalls: budget.MaxToolCalls, ToolFailures: obs.ToolFailures, ContextTokens: ctxAcc.LastRequest, PeakContextTokens: ctxAcc.PeakRequest, MaxContextTokens: r.MaxContextTokens, ServerPromptN: ctxAcc.ServerPromptN, TotalElapsed: time.Since(started), ReasoningEffort: effort, BaseRevision: baseRevision, ResultRevision: r.WS.GitHEAD(), Error: err}, strings.Join(trace, "\n\n"), err)
 		}
 
 		stepNumber := step + 1
@@ -329,8 +401,7 @@ func (r *Runtime) Execute(ctx context.Context, request string) (string, error) {
 		}
 		if err != nil {
 			r.emit(TraceEvent{Kind: "model_end", Step: stepNumber, MaxSteps: budget.MaxSteps, MessageCount: len(messages), TotalToolCalls: obs.ToolCalls, RequestBytes: stats.RequestBytes, EstimatedInputTokens: stats.EstimatedInputTokens, ResponseBytes: stats.ResponseBytes, Latency: stats.Latency, ServerTimings: stats.ServerTimings, ContextTokens: ctxTokens, PeakContextTokens: ctxAcc.PeakRequest, MaxContextTokens: r.MaxContextTokens, ServerPromptN: ctxAcc.ServerPromptN, ReasoningEffort: effort, TotalElapsed: time.Since(started), Error: err})
-			r.emit(TraceEvent{Kind: "finish", Step: stepNumber, MaxSteps: budget.MaxSteps, TotalToolCalls: obs.ToolCalls, ContextTokens: ctxAcc.LastRequest, PeakContextTokens: ctxAcc.PeakRequest, MaxContextTokens: r.MaxContextTokens, ServerPromptN: ctxAcc.ServerPromptN, TotalElapsed: time.Since(started), ReasoningEffort: effort, BaseRevision: baseRevision, ResultRevision: r.WS.GitHEAD(), Error: err})
-			return "", err
+			return r.finish(TraceEvent{Kind: "finish", Step: stepNumber, MaxSteps: budget.MaxSteps, TotalToolCalls: obs.ToolCalls, MaxToolCalls: budget.MaxToolCalls, ToolFailures: obs.ToolFailures, ContextTokens: ctxAcc.LastRequest, PeakContextTokens: ctxAcc.PeakRequest, MaxContextTokens: r.MaxContextTokens, ServerPromptN: ctxAcc.ServerPromptN, TotalElapsed: time.Since(started), ReasoningEffort: effort, BaseRevision: baseRevision, ResultRevision: r.WS.GitHEAD(), Error: err}, strings.Join(trace, "\n\n"), err)
 		}
 		obs.LastModelLatency = stats.Latency
 		if stats.ServerTimings != nil {
@@ -349,8 +420,7 @@ func (r *Runtime) Execute(ctx context.Context, request string) (string, error) {
 		if len(msg.ToolCalls) == 0 {
 			if msg.Content == "" {
 				err := fmt.Errorf("model finished without a response")
-				r.emit(TraceEvent{Kind: "finish", Step: stepNumber, MaxSteps: budget.MaxSteps, TotalToolCalls: obs.ToolCalls, ContextTokens: ctxAcc.LastRequest, PeakContextTokens: ctxAcc.PeakRequest, MaxContextTokens: r.MaxContextTokens, ServerPromptN: ctxAcc.ServerPromptN, TotalElapsed: time.Since(started), ReasoningEffort: effort, BaseRevision: baseRevision, ResultRevision: r.WS.GitHEAD(), Error: err})
-				return "", err
+				return r.finish(TraceEvent{Kind: "finish", Step: stepNumber, MaxSteps: budget.MaxSteps, TotalToolCalls: obs.ToolCalls, MaxToolCalls: budget.MaxToolCalls, ToolFailures: obs.ToolFailures, ContextTokens: ctxAcc.LastRequest, PeakContextTokens: ctxAcc.PeakRequest, MaxContextTokens: r.MaxContextTokens, ServerPromptN: ctxAcc.ServerPromptN, TotalElapsed: time.Since(started), ReasoningEffort: effort, BaseRevision: baseRevision, ResultRevision: r.WS.GitHEAD(), Error: err}, strings.Join(trace, "\n\n"), err)
 			}
 			// The user steered the run before it finished: append the steer as
 			// a user message and continue instead of returning.
@@ -358,16 +428,14 @@ func (r *Runtime) Execute(ctx context.Context, request string) (string, error) {
 				messages = append(messages, model.Message{Role: "user", Content: steer})
 				continue
 			}
-			r.emit(TraceEvent{Kind: "finish", Step: stepNumber, MaxSteps: budget.MaxSteps, TotalToolCalls: obs.ToolCalls, ContextTokens: ctxAcc.LastRequest, PeakContextTokens: ctxAcc.PeakRequest, MaxContextTokens: r.MaxContextTokens, ServerPromptN: ctxAcc.ServerPromptN, TotalElapsed: time.Since(started), ReasoningEffort: effort, BaseRevision: baseRevision, ResultRevision: r.WS.GitHEAD()})
-			return strings.Join(trace, "\n\n"), nil
+			return r.finish(TraceEvent{Kind: "finish", Step: stepNumber, MaxSteps: budget.MaxSteps, TotalToolCalls: obs.ToolCalls, MaxToolCalls: budget.MaxToolCalls, ToolFailures: obs.ToolFailures, ContextTokens: ctxAcc.LastRequest, PeakContextTokens: ctxAcc.PeakRequest, MaxContextTokens: r.MaxContextTokens, ServerPromptN: ctxAcc.ServerPromptN, TotalElapsed: time.Since(started), ReasoningEffort: effort, BaseRevision: baseRevision, ResultRevision: r.WS.GitHEAD()}, strings.Join(trace, "\n\n"), nil)
 		}
 
 		toolFailed := false
 		for _, call := range msg.ToolCalls {
 			if obs.ToolCalls >= budget.MaxToolCalls {
 				err := fmt.Errorf("execution budget exceeded: %d tool calls", budget.MaxToolCalls)
-				r.emit(TraceEvent{Kind: "finish", Step: stepNumber, MaxSteps: budget.MaxSteps, TotalToolCalls: obs.ToolCalls, ContextTokens: ctxAcc.LastRequest, PeakContextTokens: ctxAcc.PeakRequest, MaxContextTokens: r.MaxContextTokens, ServerPromptN: ctxAcc.ServerPromptN, TotalElapsed: time.Since(started), ReasoningEffort: effort, BaseRevision: baseRevision, ResultRevision: r.WS.GitHEAD(), Error: err})
-				return "", err
+				return r.finish(TraceEvent{Kind: "finish", Step: stepNumber, MaxSteps: budget.MaxSteps, TotalToolCalls: obs.ToolCalls, MaxToolCalls: budget.MaxToolCalls, ToolFailures: obs.ToolFailures, ContextTokens: ctxAcc.LastRequest, PeakContextTokens: ctxAcc.PeakRequest, MaxContextTokens: r.MaxContextTokens, ServerPromptN: ctxAcc.ServerPromptN, TotalElapsed: time.Since(started), ReasoningEffort: effort, BaseRevision: baseRevision, ResultRevision: r.WS.GitHEAD(), Error: err}, strings.Join(trace, "\n\n"), err)
 			}
 			toolStarted := time.Now()
 			var result string
@@ -422,6 +490,5 @@ func (r *Runtime) Execute(ctx context.Context, request string) (string, error) {
 	}
 
 	err := fmt.Errorf("execution budget exceeded: %d steps", budget.MaxSteps)
-	r.emit(TraceEvent{Kind: "finish", Step: budget.MaxSteps, MaxSteps: budget.MaxSteps, TotalToolCalls: obs.ToolCalls, ContextTokens: ctxAcc.LastRequest, PeakContextTokens: ctxAcc.PeakRequest, MaxContextTokens: r.MaxContextTokens, ServerPromptN: ctxAcc.ServerPromptN, TotalElapsed: time.Since(started), ReasoningEffort: effort, BaseRevision: baseRevision, ResultRevision: r.WS.GitHEAD(), Error: err})
-	return "", err
+	return r.finish(TraceEvent{Kind: "finish", Step: budget.MaxSteps, MaxSteps: budget.MaxSteps, TotalToolCalls: obs.ToolCalls, MaxToolCalls: budget.MaxToolCalls, ToolFailures: obs.ToolFailures, ContextTokens: ctxAcc.LastRequest, PeakContextTokens: ctxAcc.PeakRequest, MaxContextTokens: r.MaxContextTokens, ServerPromptN: ctxAcc.ServerPromptN, TotalElapsed: time.Since(started), ReasoningEffort: effort, BaseRevision: baseRevision, ResultRevision: r.WS.GitHEAD(), Error: err}, strings.Join(trace, "\n\n"), err)
 }
