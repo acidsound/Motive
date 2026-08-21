@@ -6,6 +6,8 @@ import (
 	"io"
 	"net/http"
 	"net/http/httptest"
+	"os"
+	"path/filepath"
 	"strings"
 	"testing"
 	"time"
@@ -14,6 +16,58 @@ import (
 	"github.com/acidsound/Motive/internal/tools"
 	"github.com/acidsound/Motive/internal/workspace"
 )
+
+// TestExecuteMediaRejectionHint verifies that when a turn carries an inlined
+// image and the model server rejects the request, the surfaced error points
+// at the likely cause (a model without vision support).
+func TestExecuteMediaRejectionHint(t *testing.T) {
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Type", "application/json")
+		http.Error(w, `{"error":{"message":"data:image/png;base64,... is not a valid image URL: this model does not support image input"}}`, http.StatusBadRequest)
+	}))
+	defer server.Close()
+
+	ws := workspace.New(t.TempDir())
+	rt := &Runtime{
+		Model: &model.Client{
+			BaseURL:         server.URL,
+			Model:           "text-only-model",
+			ReasoningEffort: "low",
+			HTTP:            server.Client(),
+		},
+		WS:       ws,
+		Exec:     &tools.Executor{WS: ws},
+		MaxSteps: 4,
+		Budget:   ExecutionBudget{MaxSteps: 4, MaxDuration: time.Minute, MaxToolCalls: 8},
+	}
+
+	// An image attachment whose size fits the inline limit. Constructed
+	// directly (not via DetectAttachment) so the turn carries an image_url
+	// part regardless of content; the server rejects it regardless.
+	img := filepath.Join(t.TempDir(), "shot.png")
+	if err := os.WriteFile(img, []byte("fake png"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	att := model.Attachment{Name: "shot.png", Path: img, MIME: "image/png", Kind: "image", Size: 8}
+
+	_, err := rt.Execute(context.Background(), "what is in this image?", att)
+	if err == nil {
+		t.Fatal("expected model rejection error")
+	}
+	if !strings.Contains(err.Error(), "may not support image/video input") {
+		t.Errorf("error lacks vision hint: %v", err)
+	}
+	if !strings.Contains(err.Error(), "text-only-model") {
+		t.Errorf("error lacks active model name: %v", err)
+	}
+
+	// A plain text turn must not carry the hint.
+	if _, err := rt.Execute(context.Background(), "hello"); err == nil {
+		t.Fatal("expected model rejection error")
+	} else if strings.Contains(err.Error(), "may not support image/video input") {
+		t.Errorf("plain turn error carries media hint: %v", err)
+	}
+}
 
 func TestContextBlockOutsideRepo(t *testing.T) {
 	r := &Runtime{WS: workspace.New(t.TempDir())}

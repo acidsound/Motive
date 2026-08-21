@@ -229,6 +229,20 @@ func (r *Runtime) takeSteer() string {
 	}
 }
 
+// hasMediaParts reports whether the message list carries inlined image or
+// video content parts. Used to annotate model failures: a server that rejects
+// the request most likely serves a model without vision support.
+func hasMediaParts(messages []model.Message) bool {
+	for _, m := range messages {
+		for _, p := range m.ContentParts {
+			if p.Type == "image_url" || p.Type == "video_url" {
+				return true
+			}
+		}
+	}
+	return false
+}
+
 // New builds a runtime from the resolved configuration. The workspace root and
 // the execution budget are read from cfg (already resolved: environment wins
 // over the config file, then the built-in default, capped at the allowed max).
@@ -400,6 +414,9 @@ func (r *Runtime) Execute(ctx context.Context, request string, attachments ...mo
 			msg, stats, err = r.Model.ChatWithEffort(ctx, messages, toolDefs, effort)
 		}
 		if err != nil {
+			if hasMediaParts(messages) {
+				err = fmt.Errorf("%v (the active model %q may not support image/video input; check the provider's model)", err, r.Model.Model)
+			}
 			r.emit(TraceEvent{Kind: "model_end", Step: stepNumber, MaxSteps: budget.MaxSteps, MessageCount: len(messages), TotalToolCalls: obs.ToolCalls, RequestBytes: stats.RequestBytes, EstimatedInputTokens: stats.EstimatedInputTokens, ResponseBytes: stats.ResponseBytes, Latency: stats.Latency, ServerTimings: stats.ServerTimings, ContextTokens: ctxTokens, PeakContextTokens: ctxAcc.PeakRequest, MaxContextTokens: r.MaxContextTokens, ServerPromptN: ctxAcc.ServerPromptN, ReasoningEffort: effort, TotalElapsed: time.Since(started), Error: err})
 			return r.finish(TraceEvent{Kind: "finish", Step: stepNumber, MaxSteps: budget.MaxSteps, TotalToolCalls: obs.ToolCalls, MaxToolCalls: budget.MaxToolCalls, ToolFailures: obs.ToolFailures, ContextTokens: ctxAcc.LastRequest, PeakContextTokens: ctxAcc.PeakRequest, MaxContextTokens: r.MaxContextTokens, ServerPromptN: ctxAcc.ServerPromptN, TotalElapsed: time.Since(started), ReasoningEffort: effort, BaseRevision: baseRevision, ResultRevision: r.WS.GitHEAD(), Error: err}, strings.Join(trace, "\n\n"), err)
 		}

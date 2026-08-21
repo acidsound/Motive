@@ -43,14 +43,18 @@ func TestBuildUserMessageParts(t *testing.T) {
 		t.Fatal(err)
 	}
 	msg = llm.BuildUserMessage("see this", []llm.Attachment{att})
-	if len(msg.ContentParts) != 2 {
-		t.Fatalf("parts = %d, want 2", len(msg.ContentParts))
+	// text part + image-name annotation + image_url part.
+	if len(msg.ContentParts) != 3 {
+		t.Fatalf("parts = %d, want 3", len(msg.ContentParts))
 	}
 	if msg.ContentParts[0].Type != "text" || msg.ContentParts[0].Text != "see this" {
 		t.Errorf("text part = %+v", msg.ContentParts[0])
 	}
-	if msg.ContentParts[1].Type != "image_url" {
-		t.Errorf("image part = %+v", msg.ContentParts[1])
+	if msg.ContentParts[1].Type != "text" || !strings.HasPrefix(msg.ContentParts[1].Text, "[attached image: x.png (") {
+		t.Errorf("annotation part = %+v", msg.ContentParts[1])
+	}
+	if msg.ContentParts[2].Type != "image_url" {
+		t.Errorf("image part = %+v", msg.ContentParts[2])
 	}
 	data, err = json.Marshal(msg)
 	if err != nil {
@@ -62,7 +66,7 @@ func TestBuildUserMessageParts(t *testing.T) {
 	if err := json.Unmarshal(data, &got); err != nil {
 		t.Fatal(err)
 	}
-	if len(got.Content) != 2 || got.Content[0]["type"] != "text" || got.Content[1]["type"] != "image_url" {
+	if len(got.Content) != 3 || got.Content[0]["type"] != "text" || got.Content[1]["type"] != "text" || got.Content[2]["type"] != "image_url" {
 		t.Fatalf("serialized content = %v", got.Content)
 	}
 }

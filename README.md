@@ -38,10 +38,12 @@ go build -o bin/motive ./cmd/motive
 ```
 
 `--attach` accepts repeatable file paths (images, videos, or any file).
-Relative paths resolve against the cwd, then the workspace root. Images and
-videos are inlined into the request as data URIs when they fit the 64 MB
-inline limit; anything larger (or any other file type) is passed as a path
-reference the model can read with the workspace tools.
+Relative paths resolve against the cwd, then the workspace root. Images are
+downscaled to at most 1280 px on the longest edge, re-encoded, and inlined
+into the request as data URIs when they fit the 20 MB inline limit, keeping
+the request body small for vision backends; videos and any other file type
+are passed as path references the model can read with the workspace tools
+(video frames can be extracted with the shell tool, e.g. `ffmpeg`).
 
 ## Configuration
 
