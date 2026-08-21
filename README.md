@@ -172,6 +172,12 @@ See [docs/design-rationale.md](docs/design-rationale.md) (English) / [docs/desig
 - Why **no context compaction** (decomposition over compression)
 - Motive's unique system advantages
 
+## Design docs
+
+- [docs/stable-semantics.md](docs/stable-semantics.md) — canonical semantics of the current implementation.
+- [docs/model-delegated-decomposition.md](docs/model-delegated-decomposition.md) — EPIC decomposition protocol (working hypothesis).
+- [docs/epic-boundary-protocol.md](docs/epic-boundary-protocol.md) — runtime mapping of the decomposition protocol (Form 1 candidate).
+
 ## Status
 
 Prototype, but already an end-to-end execution loop. The next work should focus on context quality, execution tracing, Git revision records, and a richer TUI rather than adding framework layers.

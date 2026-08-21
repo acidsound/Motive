@@ -318,12 +318,9 @@ This is a safety boundary, not a model reasoning budget.
 
 ## 9. Frontier
 
-- **Anomaly detection**: detect pathological executions from observation data.
-- **Recovery policy**: explicit responses to failure scenarios.
 - **Decomposition**: handle large tasks via the EPIC boundary protocol.
-- **Self-modification**: the model proposes/changes Motive's own policies.
 
-**[SOURCE: stable-semantics.md §20]**
+**[SOURCE: docs/model-delegated-decomposition.md, docs/epic-boundary-protocol.md]**
 
 ---
 

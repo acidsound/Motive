@@ -316,12 +316,9 @@ Runtime은 각 스텝 전에 컨텍스트 추정 토큰 수를 계산합니다:
 
 ## 9. 앞으로의 방향 (Frontier)
 
-- **이상 탐지(Anomaly Detection)**: 관측 데이터로 병목 실행 감지.
-- **복구 정책(Recovery Policy)**: 실패 시나리오에 따른 명시적 대응.
 - **분해(Decomposition)**: EPIC boundary protocol 구현으로 대형 작업 처리.
-- **자체 변경(Self-modification)**: 모델이 Motive 자체 정책을 제안/변경.
 
-**[SOURCE: stable-semantics.md §20]**
+**[SOURCE: docs/model-delegated-decomposition.md, docs/epic-boundary-protocol.md]**
 
 ---
 
