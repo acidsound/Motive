@@ -72,7 +72,7 @@ base_url = "http://127.0.0.1:8787/v1"
 model = "qwen3.8-27b"
 models = ["deepseek-v4-pro", "gemma-4-31b"]
 api_key = ""                   # optional
-reasoning_effort = "medium"    # low | medium | xhigh
+reasoning_effort = "medium"    # low | medium | high | xhigh | max
 temperature = 0.6              # sampling temperature; omit for the 0.6 default
 max_tokens = 0                 # response cap; 0 = no limit
 ```

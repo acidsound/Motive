@@ -149,6 +149,60 @@ func clearBehaviorEnv(t *testing.T) {
 	}
 }
 
+func TestLoadReasoningEffortFullVocabulary(t *testing.T) {
+	// The 5-level vocabulary must pass through both the env and the config
+	// file unchanged; only unknown values fall back to low.
+	for _, lvl := range []string{"low", "medium", "high", "xhigh", "max"} {
+		t.Run("env_"+lvl, func(t *testing.T) {
+			clearBehaviorEnv(t)
+			t.Setenv("MOTIVE_CONFIG", filepath.Join(t.TempDir(), "missing.toml"))
+			t.Setenv("MOTIVE_REASONING_EFFORT", lvl)
+			cfg, err := Load()
+			if err != nil {
+				t.Fatal(err)
+			}
+			if cfg.Default.ReasoningEffort != lvl {
+				t.Errorf("env effort %q = %q, want passthrough", lvl, cfg.Default.ReasoningEffort)
+			}
+		})
+		t.Run("file_"+lvl, func(t *testing.T) {
+			clearBehaviorEnv(t)
+			t.Setenv("MOTIVE_CONFIG", writeTempConfig(t, `
+[[providers]]
+name = "local"
+base_url = "http://127.0.0.1:8080/v1"
+model = "m"
+reasoning_effort = "`+lvl+`"
+`))
+			cfg, err := Load()
+			if err != nil {
+				t.Fatal(err)
+			}
+			if cfg.Default.ReasoningEffort != lvl {
+				t.Errorf("file effort %q = %q, want passthrough", lvl, cfg.Default.ReasoningEffort)
+			}
+		})
+	}
+}
+
+func TestLoadReasoningEffortUnknownFallsBackToLow(t *testing.T) {
+	clearBehaviorEnv(t)
+	t.Setenv("MOTIVE_CONFIG", writeTempConfig(t, `
+[[providers]]
+name = "local"
+base_url = "http://127.0.0.1:8080/v1"
+model = "m"
+reasoning_effort = "turbo"
+`))
+	cfg, err := Load()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if cfg.Default.ReasoningEffort != "low" {
+		t.Errorf("unknown file effort = %q, want low", cfg.Default.ReasoningEffort)
+	}
+}
+
 func TestResolveBoundedInt(t *testing.T) {
 	const key = "MOTIVE_TEST_RESOLVE"
 	t.Setenv(key, "")

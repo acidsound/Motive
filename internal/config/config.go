@@ -196,10 +196,14 @@ func Load() (*Config, error) {
 	}, nil
 }
 
+// normalizeEffort normalises the reasoning-effort string to the Motive
+// vocabulary (low / medium / high / xhigh / max). Unknown or empty values fall
+// back to "low". Must match the vocabulary in model/client.go normalizeEffort.
 func normalizeEffort(v string) string {
-	switch strings.ToLower(strings.TrimSpace(v)) {
-	case "low", "medium", "xhigh":
-		return strings.ToLower(strings.TrimSpace(v))
+	n := strings.ToLower(strings.TrimSpace(v))
+	switch n {
+	case "low", "medium", "high", "xhigh", "max":
+		return n
 	default:
 		return "low"
 	}
