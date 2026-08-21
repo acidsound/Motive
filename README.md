@@ -133,6 +133,26 @@ esc            stop run (busy) / close help
 ctrl+c         quit
 ```
 
+### Steer / queue policy
+
+While a run is in progress, `enter` does not start a new turn; it submits to
+the running execution in one of two modes (cycled with `ctrl+\`):
+
+- **steer** injects the message into the *current* run. The runtime drains it
+  at the next step boundary — right after the tool results/observation block
+  of the running step, or instead of finishing when the model has produced its
+  final answer — so the model sees the steer as a new user message and keeps
+  going in the same context.
+- **queue** appends the message to a FIFO. Nothing changes for the current
+  run; each queued message is processed as a fresh turn, one at a time, after
+  the current turn ends (and after any earlier queued turns).
+
+The steer path is a bounded channel (capacity 16). Submitting while it is full
+does not block: the message silently falls back to the queue instead, so input
+is never lost. `esc` / `ctrl+c` while busy drops the queue (queued turns must
+not start just to be stopped by the exit); a run interrupted by an error or
+stop still continues with any queued turns that were submitted before it.
+
 ## Tools exposed to the model
 
 - `read_file`, `write_file`, `edit_file`, `delete_file`
@@ -142,6 +162,15 @@ ctrl+c         quit
 - `git_status`, `git_diff`
 
 The tool set is intentionally concrete. There is no planner, sub-agent layer, memory manager, or plugin registry in the execution path.
+
+## Design rationale
+
+See [docs/design-rationale.md](docs/design-rationale.md) (English) / [docs/design-rationale.ko.md](docs/design-rationale.ko.md) (한국어) for a persuasive explanation of Motive's design decisions:
+
+- Why **stateless** (fresh context per request)
+- How **context** is determined
+- Why **no context compaction** (decomposition over compression)
+- Motive's unique system advantages
 
 ## Status
 
