@@ -68,15 +68,17 @@ const (
 	overlayNone overlayKind = iota
 	overlaySessionPicker
 	overlayDiff
+	overlayAttach
 )
 
 type message struct {
-	role      string // user | assistant | error
-	content   string
-	reasoning string
-	tools     []string
-	ts        time.Time
-	bookmark  bool
+	role        string // user | assistant | error
+	content     string
+	reasoning   string
+	tools       []string
+	attachments []attachItem
+	ts          time.Time
+	bookmark    bool
 }
 
 type model struct {
@@ -132,6 +134,14 @@ type model struct {
 	list       list.Model
 	diffLines  []string
 	diffScroll int
+
+	// attach is the file-attach overlay state; attachments holds the pending
+	// attachments for the next turn.
+	attach      dirPicker
+	attachments []attachItem
+	// notice is a transient one-line message (e.g. clipboard results) shown
+	// above the input box; cleared on the next submit.
+	notice string
 
 	helpOpen bool
 
@@ -287,6 +297,9 @@ func (m *model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		m.openPicker(msg.kind)
 		return m, nil
 
+	case clipImageMsg:
+		return m.handleClipImage(msg)
+
 	case spinner.TickMsg:
 		var cmd tea.Cmd
 		m.spin, cmd = m.spin.Update(msg)
@@ -300,11 +313,18 @@ func (m *model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		if m.overlay == overlaySessionPicker {
 			m.list.SetSize(max(40, m.width-6), max(10, m.height-8))
 		}
+		if m.overlay == overlayAttach {
+			m.attach.input.SetWidth(max(1, msg.Width-2))
+			m.attach.list.SetSize(max(40, m.width-6), max(10, m.height-8))
+		}
 
 	case tea.KeyPressMsg:
 		return m.handleKey(msg)
 	}
 
+	if m.overlay == overlayAttach {
+		return m.updateAttach(msg)
+	}
 	if m.overlay == overlaySessionPicker {
 		var cmd tea.Cmd
 		m.list, cmd = m.list.Update(msg)
@@ -317,6 +337,9 @@ func (m *model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 }
 
 func (m *model) handleKey(msg tea.KeyPressMsg) (tea.Model, tea.Cmd) {
+	if m.overlay == overlayAttach {
+		return m.handleAttachKey(msg)
+	}
 	if m.overlay != overlayNone {
 		return m.handleOverlayKey(msg)
 	}
@@ -384,6 +407,18 @@ func (m *model) handleKey(msg tea.KeyPressMsg) (tea.Model, tea.Cmd) {
 	case string(m.keys.ToolsToggle):
 		m.toggleTools()
 		return m, nil
+
+	case string(m.keys.AttachFile):
+		if m.busy {
+			return m, nil
+		}
+		return m, m.openAttachPicker()
+
+	case string(m.keys.PasteImage):
+		if m.busy {
+			return m, nil
+		}
+		return m, pasteImageCmd()
 
 	case string(m.keys.Help):
 		m.toggleHelp()
@@ -474,29 +509,34 @@ func (m *model) handleOverlayKey(msg tea.KeyPressMsg) (tea.Model, tea.Cmd) {
 	return m, nil
 }
 
-// submit starts a new execution turn from the input box.
+// submit starts a new execution turn from the input box, carrying any
+// pending attachments. An empty prompt is allowed when attachments exist
+// (e.g. "what is this?" is optional; a bare image alone is a valid turn).
 func (m *model) submit() (tea.Model, tea.Cmd) {
 	request := strings.TrimSpace(m.input.Value())
-	if request == "" {
+	if request == "" && len(m.attachments) == 0 {
 		return m, nil
 	}
 	m.input.Reset()
+	m.notice = ""
 	m.syncInputHeight()
-	return m.startTurn(request)
+	return m.startTurn(request, m.attachments)
 }
 
 // startTurn starts a new execution turn for the given request: records
 // history, appends transcript entries, opens the assistant message the stream
-// fills, and persists the user request to the current session.
-func (m *model) startTurn(request string) (tea.Model, tea.Cmd) {
+// fills, and persists the user request (with its attachments) to the current
+// session.
+func (m *model) startTurn(request string, attachments []attachItem) (tea.Model, tea.Cmd) {
 	m.histIdx = len(m.history)
 	m.history = append(m.history, request)
+	m.attachments = nil
 
 	if m.rt != nil && m.rt.WS != nil {
 		m.baseRev = m.rt.WS.GitHEAD()
 	}
 	m.resultRev = ""
-	m.appendMessage(message{role: "user", content: request, ts: time.Now()})
+	m.appendMessage(message{role: "user", content: request, attachments: attachments, ts: time.Now()})
 
 	m.busy = true
 	m.step = 0
@@ -526,21 +566,22 @@ func (m *model) startTurn(request string) (tea.Model, tea.Cmd) {
 			TS:           time.Now(),
 			Role:         "user",
 			Content:      request,
+			Attachments:  attachmentsModel(attachments),
 			BaseRevision: m.baseRev,
 		})
 	}
 
 	m.appendMessage(message{role: "assistant", ts: time.Now()})
-	return m, m.startExecution(request)
+	return m, m.startExecution(request, attachments)
 }
 
 // startExecution runs the turn in a cancellable context; the cancel func is
 // kept on the model so esc (stop) can abort the in-flight request.
-func (m *model) startExecution(request string) tea.Cmd {
+func (m *model) startExecution(request string, attachments []attachItem) tea.Cmd {
 	ctx, cancel := context.WithTimeout(context.Background(), m.rt.Budget.MaxDuration)
 	m.stopCancel = cancel
 	return func() tea.Msg {
-		result, err := m.rt.Execute(ctx, request)
+		result, err := m.rt.Execute(ctx, request, attachmentsModel(attachments)...)
 		return doneMsg{text: result, err: err}
 	}
 }
@@ -612,14 +653,15 @@ func (m *model) persistStopped() {
 	}
 }
 
-// nextQueued starts the next queued request, if any.
+// nextQueued starts the next queued request, if any. Queued requests are
+// plain text (attachments are only submitted with the composing turn).
 func (m *model) nextQueued() (tea.Model, tea.Cmd) {
 	if len(m.queue) == 0 {
 		return m, nil
 	}
 	next := m.queue[0]
 	m.queue = m.queue[1:]
-	return m.startTurn(next)
+	return m.startTurn(next, nil)
 }
 
 func (m *model) finishTurn(done doneMsg) (tea.Model, tea.Cmd) {
@@ -826,7 +868,11 @@ func (m *model) loadSession(id string) {
 	for _, e := range entries {
 		switch e.Role {
 		case "user":
-			m.appendMessage(message{role: "user", content: e.Content, ts: e.TS})
+			atts := make([]attachItem, 0, len(e.Attachments))
+			for _, a := range e.Attachments {
+				atts = append(atts, attachItem{Attachment: a, thumb: thumbnail(a.Path)})
+			}
+			m.appendMessage(message{role: "user", content: e.Content, attachments: atts, ts: e.TS})
 		case "assistant":
 			m.appendMessage(message{role: "assistant", content: e.Content, reasoning: e.Reasoning, tools: e.Tools, ts: e.TS})
 		case "error":
@@ -942,7 +988,9 @@ func (m *model) renderTranscript(width, available int) []string {
 func (m model) renderMessage(msg message, width int) []string {
 	switch msg.role {
 	case "user":
-		return wrapStyled(styleUser.Render("❯ "+msg.content), width)
+		lines := wrapStyled(styleUser.Render("❯ "+msg.content), width)
+		lines = append(lines, attachmentLines(msg.attachments, width)...)
+		return lines
 	case "error":
 		return wrapStyled(styleError.Render("✖ "+msg.content), width)
 	case "stopped":
@@ -1018,6 +1066,9 @@ func (m model) statusLine() string {
 	if m.sessionID != "" {
 		b.WriteString(" · " + m.sessionID)
 	}
+	if len(m.attachments) > 0 {
+		b.WriteString(fmt.Sprintf(" · 📎%d", len(m.attachments)))
+	}
 	if m.helpOpen {
 		b.WriteString(" · help")
 	}
@@ -1091,6 +1142,9 @@ func (m *model) View() tea.View {
 	if m.overlay == overlaySessionPicker {
 		return m.pickerView(width, height)
 	}
+	if m.overlay == overlayAttach {
+		return m.attachView(width, height)
+	}
 
 	status := m.statusLine()
 	statusH := lineCount(status)
@@ -1108,7 +1162,20 @@ func (m *model) View() tea.View {
 	if bodyW < 20 {
 		bodyW = 20
 	}
-	avail := height - m.inputH - statusH
+	// Lines rendered between the status bar and the input box: transient
+	// notice plus the pending-attachment preview with inline thumbnails.
+	// They must be subtracted from the transcript's available height,
+	// otherwise the total content overflows the terminal and the input
+	// box is pushed off-screen (or overlaps the notice).
+	var pre []string
+	if m.notice != "" {
+		pre = append(pre, styleError.Render(m.notice))
+	}
+	pre = append(pre, attachmentLines(m.attachments, width)...)
+	avail := height - m.inputH - statusH - len(pre)
+	if avail < 1 {
+		avail = 1
+	}
 	transcript := m.renderTranscript(bodyW, avail)
 
 	var body []string
@@ -1130,12 +1197,16 @@ func (m *model) View() tea.View {
 	}
 	b.WriteString(status)
 	b.WriteString("\n")
+	for _, l := range pre {
+		b.WriteString(l)
+		b.WriteString("\n")
+	}
 	b.WriteString(m.renderInputView(m.input.View()))
 
 	v := tea.NewView(b.String())
 	v.AltScreen = true
 	if cursor := m.input.Cursor(); cursor != nil {
-		cursor.Y += len(body) + statusH
+		cursor.Y += len(body) + statusH + len(pre)
 		v.Cursor = cursor
 	}
 	return v
@@ -1147,6 +1218,26 @@ func (m model) pickerView(width, height int) tea.View {
 	b.WriteString("\n")
 	b.WriteString(m.list.View())
 	b.WriteString(styleDim.Render("  ↑/↓ select · enter apply · esc close"))
+	v := tea.NewView(b.String())
+	v.AltScreen = true
+	return v
+}
+
+func (m model) attachView(width, height int) tea.View {
+	var b strings.Builder
+	b.WriteString(stylePanelHeading.Render("Attach file"))
+	b.WriteString("  " + styleDim.Render(m.attach.dir))
+	b.WriteString("\n")
+	b.WriteString(stylePrompt.Render("path ") + m.attach.input.View())
+	b.WriteString("\n")
+	if m.attach.err != "" {
+		b.WriteString(styleError.Render("✖ " + m.attach.err))
+	} else {
+		b.WriteString(styleDim.Render(m.attach.hint))
+	}
+	b.WriteString("\n")
+	b.WriteString(m.attach.list.View())
+	b.WriteString(styleDim.Render("  ↑/↓ browse · enter attach · type path or filter · esc close"))
 	v := tea.NewView(b.String())
 	v.AltScreen = true
 	return v
@@ -1195,6 +1286,8 @@ func buildHelpLines(k Keymap) []string {
 		{string(k.SessionPicker), "Session picker"},
 		{string(k.DiffToggle), "Git diff"},
 		{string(k.ToolsToggle), "Toggle tools"},
+		{string(k.AttachFile), "Attach file"},
+		{string(k.PasteImage), "Paste clipboard image"},
 		{string(k.Help), "Toggle help (this)"},
 		{string(k.ScrollUp), "Scroll up"},
 		{string(k.ScrollDown), "Scroll down"},

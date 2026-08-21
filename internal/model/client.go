@@ -15,12 +15,75 @@ import (
 )
 
 type Message struct {
-	Role             string     `json:"role"`
-	Content          string     `json:"content"`
-	ReasoningContent string     `json:"reasoning_content,omitempty"`
-	ToolCalls        []ToolCall `json:"tool_calls,omitempty"`
-	ToolCallID       string     `json:"tool_call_id,omitempty"`
-	FinishReason     string     `json:"-"`
+	Role string `json:"role"`
+	// Content is the plain-text body. When ContentParts is non-empty it is
+	// ignored during marshaling and "content" is emitted as the multimodal
+	// content array instead (OpenAI-compatible). Responses from the server
+	// always decode into Content.
+	Content string `json:"-"`
+	// ContentParts carries a multimodal user message (text + image/video
+	// parts). See MarshalJSON.
+	ContentParts     []ContentPart `json:"-"`
+	ReasoningContent string        `json:"reasoning_content,omitempty"`
+	ToolCalls        []ToolCall    `json:"tool_calls,omitempty"`
+	ToolCallID       string        `json:"tool_call_id,omitempty"`
+	FinishReason     string        `json:"-"`
+}
+
+// MarshalJSON serializes the message. The "content" field is always present:
+// the multimodal content array when ContentParts is set (attachments), the
+// plain string otherwise (including the empty string, matching the previous
+// behavior that tool messages always carry an explicit content key).
+func (m Message) MarshalJSON() ([]byte, error) {
+	type alias Message
+	aux := struct {
+		Role             string          `json:"role"`
+		Content          json.RawMessage `json:"content"`
+		ReasoningContent string          `json:"reasoning_content,omitempty"`
+		ToolCalls        []ToolCall      `json:"tool_calls,omitempty"`
+		ToolCallID       string          `json:"tool_call_id,omitempty"`
+	}{Role: m.Role, ReasoningContent: m.ReasoningContent, ToolCalls: m.ToolCalls, ToolCallID: m.ToolCallID}
+	if len(m.ContentParts) > 0 {
+		parts, err := json.Marshal(m.ContentParts)
+		if err != nil {
+			return nil, err
+		}
+		aux.Content = parts
+	} else {
+		content, err := json.Marshal(m.Content)
+		if err != nil {
+			return nil, err
+		}
+		aux.Content = content
+	}
+	return json.Marshal(aux)
+}
+
+// UnmarshalJSON decodes a server response message. Assistant and tool
+// messages always carry a string content, so "content" is read as plain text;
+// a multimodal array is not expected in responses and is ignored.
+func (m *Message) UnmarshalJSON(data []byte) error {
+	var aux struct {
+		Role             string     `json:"role"`
+		Content          json.RawMessage `json:"content"`
+		ReasoningContent string     `json:"reasoning_content"`
+		ToolCalls        []ToolCall `json:"tool_calls"`
+		ToolCallID       string     `json:"tool_call_id"`
+	}
+	if err := json.Unmarshal(data, &aux); err != nil {
+		return err
+	}
+	m.Role = aux.Role
+	m.ReasoningContent = aux.ReasoningContent
+	m.ToolCalls = aux.ToolCalls
+	m.ToolCallID = aux.ToolCallID
+	if len(aux.Content) > 0 && string(aux.Content) != "null" {
+		var s string
+		if err := json.Unmarshal(aux.Content, &s); err == nil {
+			m.Content = s
+		}
+	}
+	return nil
 }
 
 type ToolCall struct {

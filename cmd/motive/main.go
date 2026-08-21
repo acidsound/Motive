@@ -5,6 +5,7 @@ import (
 	"flag"
 	"fmt"
 	"os"
+	"path/filepath"
 	"strings"
 	"time"
 
@@ -31,10 +32,21 @@ func newModelClient(cfg *config.Config) *model.Client {
 	}
 }
 
+// attachFlags collects repeatable --attach file arguments.
+type attachFlags []string
+
+func (f *attachFlags) String() string { return strings.Join(*f, ", ") }
+func (f *attachFlags) Set(v string) error {
+	*f = append(*f, v)
+	return nil
+}
+
 func main() {
 	tuiMode := flag.Bool("tui", false, "start the terminal UI")
 	verbose := flag.Bool("v", false, "show execution telemetry")
 	resume := flag.Bool("r", false, "open the TUI session picker on start")
+	var attach attachFlags
+	flag.Var(&attach, "attach", "attach a file (image/video/any); relative paths resolve against the cwd, then the workspace root")
 	flag.Parse()
 
 	cfg, err := config.Load()
@@ -43,8 +55,10 @@ func main() {
 		os.Exit(1)
 	}
 
-	sessDir := cfg.StateDir + "/sessions"
-	sess, err := session.NewStore(sessDir)
+	// Session state is namespaced per workspace under the state dir
+	// (~/.motive/<workspace-namespace>) so transcripts never mix across
+	// workspaces and the workspace itself never holds Motive state.
+	sess, err := session.NewStoreForWorkspace(filepath.Join(cfg.StateDir, "sessions"), cfg.Workspace)
 	if err != nil {
 		fmt.Fprintf(os.Stderr, "sessions: %v\n", err)
 		os.Exit(1)
@@ -103,7 +117,23 @@ func main() {
 		}
 	}
 
-	result, err := rt.Execute(context.Background(), flag.Arg(0))
+	// Resolve --attach paths: try the cwd first, then the workspace root, so
+	// both relative-to-cwd and relative-to-workspace references work. The
+	// workspace root also wins for absolute paths when the file lives there.
+	var attachments []model.Attachment
+	for _, p := range attach {
+		att, err := model.DetectAttachment(p)
+		if err != nil && rt.WS != nil && rt.WS.Root != "" {
+			att, err = model.DetectAttachment(filepath.Join(rt.WS.Root, p))
+		}
+		if err != nil {
+			fmt.Fprintf(os.Stderr, "attach %s: %v\n", p, err)
+			os.Exit(1)
+		}
+		attachments = append(attachments, att)
+	}
+
+	result, err := rt.Execute(context.Background(), flag.Arg(0), attachments...)
 	if err != nil {
 		fmt.Fprintln(os.Stderr, err)
 		// On failure the result holds the unit's partial assistant text —

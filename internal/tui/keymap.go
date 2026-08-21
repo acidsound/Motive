@@ -23,6 +23,8 @@ type Keymap struct {
 	DiffToggle      Binding
 	ToolsToggle     Binding
 	ReasoningToggle Binding
+	AttachFile      Binding
+	PasteImage      Binding
 	ScrollUp        Binding
 	ScrollDown      Binding
 	PageUp          Binding
@@ -46,6 +48,8 @@ func DefaultKeymap() Keymap {
 		DiffToggle:      "ctrl+d",
 		ToolsToggle:     "ctrl+t",
 		ReasoningToggle: "ctrl+o",
+		AttachFile:      "ctrl+a",
+		PasteImage:      "ctrl+y",
 		ScrollUp:        "ctrl+k",
 		ScrollDown:      "ctrl+j",
 		PageUp:          "ctrl+shift+k",
@@ -70,6 +74,8 @@ func (k *Keymap) ApplyEnv() {
 	k.DiffToggle = envBinding("MOTIVE_KEY_DIFF_TOGGLE", k.DiffToggle)
 	k.ToolsToggle = envBinding("MOTIVE_KEY_TOOLS_TOGGLE", k.ToolsToggle)
 	k.ReasoningToggle = envBinding("MOTIVE_KEY_REASONING_TOGGLE", k.ReasoningToggle)
+	k.AttachFile = envBinding("MOTIVE_KEY_ATTACH_FILE", k.AttachFile)
+	k.PasteImage = envBinding("MOTIVE_KEY_PASTE_IMAGE", k.PasteImage)
 	k.ScrollUp = envBinding("MOTIVE_KEY_SCROLL_UP", k.ScrollUp)
 	k.ScrollDown = envBinding("MOTIVE_KEY_SCROLL_DOWN", k.ScrollDown)
 	k.PageUp = envBinding("MOTIVE_KEY_PAGE_UP", k.PageUp)

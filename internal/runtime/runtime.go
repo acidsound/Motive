@@ -337,13 +337,13 @@ func (r *Runtime) finish(event TraceEvent, text string, err error) (string, erro
 // dies before emitting anything, no in-memory state is carried across calls;
 // the caller can re-run and the model recovers by reading the session transcript
 // through the session_log tool.
-func (r *Runtime) Execute(ctx context.Context, request string) (string, error) {
+func (r *Runtime) Execute(ctx context.Context, request string, attachments ...model.Attachment) (string, error) {
 	if strings.TrimSpace(request) == "" {
 		return "", fmt.Errorf("request is empty")
 	}
 	started := time.Now()
 	baseRevision := r.WS.GitHEAD()
-	messages := []model.Message{{Role: "system", Content: r.ContextBlock()}, {Role: "user", Content: request}}
+	messages := []model.Message{{Role: "system", Content: r.ContextBlock()}, model.BuildUserMessage(request, attachments)}
 	toolDefs := tools.Definitions()
 	trace := []string{}
 	budget := r.Budget

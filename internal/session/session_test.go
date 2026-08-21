@@ -1,6 +1,8 @@
 package session
 
 import (
+	"os"
+	"path/filepath"
 	"strings"
 	"testing"
 	"time"
@@ -84,6 +86,68 @@ func TestListOrderNewestFirst(t *testing.T) {
 	}
 	if summaries[0].ID != newer || summaries[1].ID != old {
 		t.Errorf("order = %q then %q, want newest first", summaries[0].ID, summaries[1].ID)
+	}
+}
+
+func TestWorkspaceNamespace(t *testing.T) {
+	a := WorkspaceNamespace("/Users/me/Projects/Motive")
+	b := WorkspaceNamespace("/Users/me/Projects/Motive")
+	if a != b {
+		t.Errorf("same root must map to the same namespace: %q vs %q", a, b)
+	}
+	c := WorkspaceNamespace("/Users/me/Projects/Other")
+	if a == c {
+		t.Errorf("different roots must map to different namespaces: %q", a)
+	}
+	if !strings.Contains(a, "Motive") {
+		t.Errorf("namespace should carry the readable basename: %q", a)
+	}
+	// A trailing slash must not change the namespace.
+	d := WorkspaceNamespace("/Users/me/Projects/Motive/")
+	if d != a {
+		t.Errorf("trailing slash changed the namespace: %q vs %q", d, a)
+	}
+	// The namespace must be a single safe path segment.
+	if strings.ContainsAny(a, "/\\") || a == "." || a == ".." {
+		t.Errorf("namespace is not a safe path segment: %q", a)
+	}
+}
+
+func TestNewStoreForWorkspace(t *testing.T) {
+	base := t.TempDir()
+	ws := "/Users/me/Projects/Motive"
+	s, err := NewStoreForWorkspace(filepath.Join(base, "sessions"), ws)
+	if err != nil {
+		t.Fatal(err)
+	}
+	want := filepath.Join(base, "sessions", WorkspaceNamespace(ws))
+	if s.Dir != want {
+		t.Errorf("store dir = %q, want %q", s.Dir, want)
+	}
+	if _, err := os.Stat(s.Dir); err != nil {
+		t.Errorf("namespaced dir was not created: %v", err)
+	}
+
+	// Two workspaces must not share a session store.
+	other, err := NewStoreForWorkspace(filepath.Join(base, "sessions"), "/Users/me/Projects/Other")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if other.Dir == s.Dir {
+		t.Errorf("different workspaces share store dir %q", s.Dir)
+	}
+
+	// An empty workspace root falls back to the cwd, still namespaced.
+	cwd, err := os.Getwd()
+	if err != nil {
+		t.Fatal(err)
+	}
+	fallback, err := NewStoreForWorkspace(filepath.Join(base, "sessions"), "")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if fallback.Dir != filepath.Join(base, "sessions", WorkspaceNamespace(cwd)) {
+		t.Errorf("fallback store dir = %q, want cwd-namespaced dir", fallback.Dir)
 	}
 }
 

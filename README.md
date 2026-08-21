@@ -34,7 +34,14 @@ go build -o bin/motive ./cmd/motive
 ./bin/motive --tui
 ./bin/motive "inspect this project and fix the failing test"
 ./bin/motive --tui -r   # open the session picker on start
+./bin/motive --attach shot.png "what is in this image?"
 ```
+
+`--attach` accepts repeatable file paths (images, videos, or any file).
+Relative paths resolve against the cwd, then the workspace root. Images and
+videos are inlined into the request as data URIs when they fit the 64 MB
+inline limit; anything larger (or any other file type) is passed as a path
+reference the model can read with the workspace tools.
 
 ## Configuration
 
@@ -50,7 +57,7 @@ Default location `~/.config/motive/config.toml` (override with `MOTIVE_CONFIG`):
 ```toml
 # Top level
 default_provider = "gateway"   # which provider is active
-state_dir = "~/.motive"        # session storage        (MOTIVE_STATE_DIR)
+state_dir = "~/.motive"        # session storage root   (MOTIVE_STATE_DIR)
 workspace = "."                # workspace root         (MOTIVE_WORKSPACE); empty = cwd
 
 # Execution budget (all optional, capped at hard maximums)
@@ -102,6 +109,21 @@ config file, the environment variables form a single "default" provider.
 `OPENAI_BASE_URL`, `OPENAI_MODEL`, and `OPENAI_API_KEY` are accepted as
 fallbacks for the endpoint settings when no `MOTIVE_*` value is set.
 
+### Session storage
+
+Session transcripts are stored **outside the workspace**, namespaced per
+workspace under the state dir:
+
+```text
+~/.motive/<workspace-namespace>/<session-id>.jsonl
+```
+
+`<workspace-namespace>` is `<basename>-<12-hex>` derived from the absolute
+workspace root (e.g. `Motive-9f2c1a4b7e8d`), so the same workspace always maps
+to the same namespace and transcripts of different workspaces never mix. The
+workspace itself never holds Motive session records or recovery state. An
+empty workspace root resolves to the current working directory.
+
 ### TUI
 
 The TUI streams model output live with reasoning shown dimmed, renders
@@ -124,6 +146,7 @@ Controls (rebindable via `MOTIVE_KEY_<NAME>`, e.g.
 enter          run (busy: steer/queue)   ctrl+e   cycle reasoning effort
 shift+enter    newline                   ctrl+r   session picker
 ctrl+d         git diff view             ctrl+t   toggle tools
+ctrl+a         attach file               ctrl+y   paste clipboard image
 ctrl+\         cycle steer/queue (busy)  ctrl+/   toggle help
 ctrl+k / ctrl+j                         scroll up / down
 ctrl+shift+k / ctrl+shift+j             page up / down
@@ -132,6 +155,15 @@ ctrl+g         bookmark                  ctrl+l   clear transcript
 esc            stop run (busy) / close help
 ctrl+c         quit
 ```
+
+`ctrl+a` opens a file browser rooted at the workspace: type a path (absolute,
+`~`, or relative) or filter the current directory by name, then `enter` to
+attach. `ctrl+y` grabs an image from the clipboard (macOS via osascript,
+Linux via `wl-paste`/`xclip`); if the terminal supports inline images
+(iTerm2, kitty, ghostty, WezTerm) a thumbnail preview is shown next to the
+pending attachments above the input box. Attachments are carried into the
+session transcript and can be submitted without any prompt text (a bare image
+alone is a valid turn).
 
 ### Steer / queue policy
 

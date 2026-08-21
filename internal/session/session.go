@@ -4,6 +4,8 @@ package session
 
 import (
 	"bufio"
+	"crypto/sha1"
+	"encoding/hex"
 	"encoding/json"
 	"fmt"
 	"os"
@@ -11,6 +13,8 @@ import (
 	"sort"
 	"strings"
 	"time"
+
+	model "github.com/acidsound/Motive/internal/model"
 )
 
 // Entry is one persisted transcript line: a user request, an assistant reply,
@@ -28,6 +32,7 @@ type Entry struct {
 	Content        string    `json:"content,omitempty"`
 	Reasoning      string    `json:"reasoning,omitempty"`
 	Tools          []string  `json:"tools,omitempty"`
+	Attachments    []model.Attachment `json:"attachments,omitempty"`
 	BaseRevision   string    `json:"base_revision,omitempty"`
 	ResultRevision string    `json:"result_revision,omitempty"`
 	ElapsedMS      int64     `json:"elapsed_ms,omitempty"`
@@ -49,11 +54,44 @@ type Summary struct {
 // Store writes and reads session transcripts under a single directory.
 type Store struct{ Dir string }
 
+// NewStore creates a store rooted at dir. Production callers should use
+// NewStoreForWorkspace instead: session state must never live inside a
+// workspace, and a global flat directory would mix the transcripts of every
+// workspace the user has ever worked on.
 func NewStore(dir string) (*Store, error) {
 	if err := os.MkdirAll(dir, 0o755); err != nil {
 		return nil, err
 	}
 	return &Store{Dir: dir}, nil
+}
+
+// WorkspaceNamespace derives a stable, filesystem-safe directory name for a
+// workspace root. The hash is over the canonical absolute root path, so the
+// same workspace always maps to the same namespace; the trailing directory
+// name is included as a readable prefix so the namespace is identifiable by
+// eye.
+func WorkspaceNamespace(workspaceRoot string) string {
+	root := strings.TrimSpace(workspaceRoot)
+	if root == "" {
+		root = "."
+	}
+	if abs, err := filepath.Abs(root); err == nil {
+		root = abs
+	}
+	sum := sha1.Sum([]byte(root))
+	return strings.TrimSuffix(filepath.Base(root), "/") + "-" + hex.EncodeToString(sum[:])[:12]
+}
+
+// NewStoreForWorkspace creates the session store for the given workspace under
+// dir, namespaced per workspace: dir/<namespace>. An empty workspace root
+// falls back to the current working directory, so a store is always scoped to
+// a concrete workspace and the workspace itself never holds Motive state.
+func NewStoreForWorkspace(dir, workspaceRoot string) (*Store, error) {
+	root := strings.TrimSpace(workspaceRoot)
+	if root == "" {
+		root, _ = os.Getwd()
+	}
+	return NewStore(filepath.Join(dir, WorkspaceNamespace(root)))
 }
 
 func (s *Store) path(id string) string {
@@ -222,6 +260,13 @@ func FormatEntry(e Entry) string {
 		} else {
 			content += " [" + tools + "]"
 		}
+	}
+	if len(e.Attachments) > 0 {
+		names := make([]string, 0, len(e.Attachments))
+		for _, a := range e.Attachments {
+			names = append(names, a.Name)
+		}
+		content += " [attached: " + strings.Join(names, ", ") + "]"
 	}
 	ts := ""
 	if !e.TS.IsZero() {
