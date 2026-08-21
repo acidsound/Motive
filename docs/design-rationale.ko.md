@@ -284,6 +284,22 @@ Runtime은 각 스텝 전에 컨텍스트 추정 토큰 수를 계산합니다:
 안전 경계(safety boundary)로, 모델 추론 예산이 아닙니다.  
 **[SOURCE: config.go, runtime.go]**
 
+### 7.8 분해(Decomposition) — 구현 완료 (Form 0)
+
+대형 작업은 **분해(decomposition)**를 통해 처리됩니다: 하나의 EPIC을 여러 독립적이고 재조합 가능한
+바운디드 실행(bounded execution)으로 분할합니다. 이는 **데이터**로 표현된 모델 행동입니다
+(`motive.tasks/plan.md` + 유닛별 `brief.md`). 런타임 플래너나 서브에이전트가 아닙니다.
+유닛은 기존 `shell` 도구를 통해 자체 신선한 컨텍스트에서 실행됩니다.
+런타임은 모든 종료 경로에서 기계적인 **`UnitBoundary`** 레코드(상태, `base_rev → result_rev`,
+예산 사용량)를 작성하며, one-shot CLI는 각 유닛에 자체 세션 트랜스크립트를 부여하여 복구를 지원합니다.
+
+분해는 의도적으로 오류 가능성을 내포합니다 — 잘못된 분할은 경계 이벤트(`budget-exceeded` / `error` /
+조립 불가능한 diff)로 표면화되며, `plan.md`를 다시 작성하여 수정합니다. `plan.md`는 가설(hypothesis)이지
+계약(contract)이 아닙니다. 상위(parent)는 저렴한 단계(brief 작성 → 유닛 실행 → 결과 읽기 → 다음 brief 작성)만
+수행하고, 무거운 작업은 자체 예산을 가진 신선한 컨텍스트 유닛 내부에서 실행됩니다.
+
+**[SOURCE: docs/decomposition.md; internal/runtime/runtime.go UnitBoundary; cmd/motive/main.go]**
+
 ---
 
 ## 8. 장점 요약
@@ -316,9 +332,16 @@ Runtime은 각 스텝 전에 컨텍스트 추정 토큰 수를 계산합니다:
 
 ## 9. 앞으로의 방향 (Frontier)
 
-- **분해(Decomposition)**: EPIC boundary protocol 구현으로 대형 작업 처리.
+분해(Form 0)는 **구현 완료**되었습니다(§7.8). 남은 것은 보류/범위 외 작업입니다:
 
-**[SOURCE: docs/decomposition.md]**
+- **Track A — 컨텍스트 생명주기(context lifecycle)**: 단일 실행의 트리밍/컴팩션은
+  아직 범위 외(`stable-semantics.md` §23).
+- **자율 정책 자체 수정(autonomous policy self-modification)**
+  (`stable-semantics.md` §20 항목 5): 이후의 별도 프론티어.
+- **일반화된 다중 유닛 오케스트레이션**: 경계 기계(boundary machinery)는 검증되었지만,
+  여러 유닛에 걸친 신뢰할 수 있는 대규모 분해는 아직 한 실험에서 입증된 모델 스킬일 뿐,
+  런타임 보장이 아닙니다.
+  **[SOURCE: docs/decomposition.md §12]**
 
 ---
 
@@ -335,3 +358,4 @@ Runtime은 각 스텝 전에 컨텍스트 추정 토큰 수를 계산합니다:
 | **Bounded execution** | 안전 경계, 모델의 추론 예산과 분리 | runtime.go, config.go |
 | **Tool failure ≠ termination** | 모델이 회복할 기회 제공 | runtime.go toolFailed |
 | **xhigh escalation** | 실패 후 집중 추론 유도 | runtime.go effort 스위칭 |
+| **분해(Decomposition) (Form 0)** | 하나의 EPIC = 여러 신선한 컨텍스트 바운디드 유닛; 데이터 기반(`brief.md`), 런타임 플래너 아님 | docs/decomposition.md, runtime.go UnitBoundary |

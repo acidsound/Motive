@@ -286,6 +286,24 @@ The user can intervene while a run is in progress:
 This is a safety boundary, not a model reasoning budget.
 **[SOURCE: config.go, runtime.go]**
 
+### 7.8 Decomposition — realized (Form 0)
+
+Large tasks are handled by **decomposition**: splitting one EPIC into multiple
+independent, recomposable bounded executions. This is model behavior expressed
+as **data** (`motive.tasks/plan.md` + per-unit `brief.md`), never a runtime
+planner or sub-agent. A unit runs in its own fresh context via the existing
+`shell` tool; the runtime writes a mechanical **`UnitBoundary`** record
+(status, `base_rev → result_rev`, budget usage) on every termination path, and
+the one-shot CLI gives each unit its own session transcript for recovery.
+
+Decomposition is deliberately fallible — a wrong split surfaces as a boundary
+event (`budget-exceeded` / `error` / uncomposable diff) and is repaired by
+rewriting `plan.md`, which is a hypothesis, not a contract. The parent only
+performs cheap steps (write brief → run unit → read result → write next brief);
+the heavy work runs inside fresh-context units with their own budgets.
+
+**[SOURCE: docs/decomposition.md; internal/runtime/runtime.go UnitBoundary; cmd/motive/main.go]**
+
 ---
 
 ## 8. Summary of strengths
@@ -318,9 +336,17 @@ This is a safety boundary, not a model reasoning budget.
 
 ## 9. Frontier
 
-- **Decomposition**: handle large tasks via the EPIC boundary protocol.
+Decomposition (Form 0) is **realized** (§7.8). What remains is the deferred,
+out-of-scope work:
 
-**[SOURCE: docs/decomposition.md]**
+- **Track A — context lifecycle**: trimming/compaction for a single execution
+  remains out of scope (`stable-semantics.md` §23).
+- **Autonomous policy self-modification** (`stable-semantics.md` §20 item 5):
+  a later, separate frontier.
+- **Generalized multi-unit orchestration**: the boundary machinery is verified,
+  but reliable large-scale decomposition across many units remains a model
+  skill demonstrated by one experiment, not a runtime guarantee.
+  **[SOURCE: docs/decomposition.md §12]**
 
 ---
 
@@ -337,3 +363,4 @@ This is a safety boundary, not a model reasoning budget.
 | **Bounded execution** | safety boundary, separate from the model's reasoning budget | runtime.go, config.go |
 | **Tool failure ≠ termination** | gives the model a chance to recover | runtime.go toolFailed |
 | **xhigh escalation** | induces focused reasoning after failure | runtime.go effort switching |
+| **Decomposition (Form 0)** | one EPIC = many fresh-context bounded units; data-driven (`brief.md`), not a runtime planner | docs/decomposition.md, runtime.go UnitBoundary |
