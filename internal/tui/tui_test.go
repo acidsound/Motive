@@ -141,21 +141,56 @@ func TestToolsCollapsedRendering(t *testing.T) {
 		t.Errorf("expanded: missing individual tool line:\n%s", joined)
 	}
 
-	// Collapsed: single summary line with the last tool call's details.
+	// Collapsed: summary line plus the most recent calls; older ones fold
+	// into the "done" count.
 	m.toolsCollapsed = true
 	lines = m.renderMessage(msg, 60)
 	joined = strings.Join(lines, "\n")
 	if !strings.Contains(joined, "3 tool calls") {
 		t.Errorf("collapsed: missing summary:\n%s", joined)
 	}
-	if !strings.Contains(joined, "last: write_file · 45B · 8ms") {
-		t.Errorf("collapsed: missing last tool call details:\n%s", joined)
+	if !strings.Contains(joined, "✓ 1 done") {
+		t.Errorf("collapsed: missing done count:\n%s", joined)
+	}
+	if !strings.Contains(joined, "read_file · 30B · 2ms") || !strings.Contains(joined, "write_file · 45B · 8ms") {
+		t.Errorf("collapsed: recent tool lines should stay visible:\n%s", joined)
 	}
 	if strings.Contains(joined, "shell · 12B · 5ms") {
-		t.Errorf("collapsed: should not show individual tool lines:\n%s", joined)
+		t.Errorf("collapsed: oldest tool should fold into summary:\n%s", joined)
 	}
-	if strings.Contains(joined, "read_file · 30B · 2ms") {
-		t.Errorf("collapsed: should not show non-last tool lines:\n%s", joined)
+}
+
+func TestExpandedToolArgsPreview(t *testing.T) {
+	m := newTestModel()
+	m.toolsCollapsed = false
+	msg := message{
+		role:     "assistant",
+		tools:    []string{"read_file · 30B · 2ms"},
+		toolArgs: []string{`path=internal/tui/tui.go`},
+	}
+	joined := strings.Join(m.renderMessage(msg, 80), "\n")
+	if !strings.Contains(joined, "path=internal/tui/tui.go") {
+		t.Errorf("expanded: missing args preview:\n%s", joined)
+	}
+
+	// Collapsed view must not show the args preview.
+	m.toolsCollapsed = true
+	joined = strings.Join(m.renderMessage(msg, 80), "\n")
+	if strings.Contains(joined, "path=internal/tui/tui.go") {
+		t.Errorf("collapsed: args preview should be hidden:\n%s", joined)
+	}
+}
+
+func TestToolArgsPreviewFormat(t *testing.T) {
+	got := toolArgsPreview("shell", `{"command":"go test ./...","timeout":30}`)
+	if got != `command=go test ./... timeout=30` {
+		t.Errorf("unexpected preview: %q", got)
+	}
+	if got := toolArgsPreview("x", `{}`); got != "" {
+		t.Errorf("empty args should yield empty preview, got %q", got)
+	}
+	if got := toolArgsPreview("x", strings.Repeat("a", 200)); len(got) > 130 {
+		t.Errorf("long args should be truncated, got %d chars", len(got))
 	}
 }
 

@@ -14,6 +14,23 @@ import (
 	"github.com/acidsound/Motive/internal/workspace"
 )
 
+// countLines counts the number of lines in a tool result.
+func countLines(s string) int {
+	if s == "" {
+		return 0
+	}
+	return strings.Count(strings.TrimSuffix(s, "\n"), "\n") + 1
+}
+
+// resultHead returns the first line of a tool result for the live status view.
+func resultHead(s string) string {
+	s = strings.TrimRight(s, "\n")
+	if i := strings.IndexByte(s, '\n'); i >= 0 {
+		s = s[:i]
+	}
+	return s
+}
+
 const systemPrompt = `You are Motive, a model-centric software execution runtime. Work directly on the user's workspace instead of merely describing code. Each user request is an independent execution request: do not assume unseen chat history. Inspect the workspace when needed, use tools decisively, make concrete file changes when asked, run tests or builds when useful, and report what actually happened. Prefer the smallest relevant context and avoid reading unrelated files. You may use shell, filesystem, web search, and git tools. When modifying the workspace, verify the resulting state before claiming success; never claim a commit, push, test, or build unless tool output confirms it. Each execution is budget-bounded: when you are near the step or tool budget, put a one-line statement of what remains and where to continue in your assistant message alongside your last tool call, so a budget cap does not lose your forward intent.`
 
 type TraceEvent struct {
@@ -22,6 +39,7 @@ type TraceEvent struct {
 	MaxSteps             int
 	MessageCount         int
 	ToolName             string
+	ToolArgs             string
 	ToolCalls            int
 	TotalToolCalls       int
 	MaxToolCalls         int
@@ -42,6 +60,8 @@ type TraceEvent struct {
 	ServerPromptN        int
 	Text                 string
 	Reasoning            string
+	ToolResultLines      int
+	ToolResultHead       string
 	Error                error
 }
 
@@ -455,6 +475,7 @@ func (r *Runtime) Execute(ctx context.Context, request string, attachments ...mo
 				return r.finish(TraceEvent{Kind: "finish", Step: stepNumber, MaxSteps: budget.MaxSteps, TotalToolCalls: obs.ToolCalls, MaxToolCalls: budget.MaxToolCalls, ToolFailures: obs.ToolFailures, ContextTokens: ctxAcc.LastRequest, PeakContextTokens: ctxAcc.PeakRequest, MaxContextTokens: r.MaxContextTokens, ServerPromptN: ctxAcc.ServerPromptN, TotalElapsed: time.Since(started), ReasoningEffort: effort, BaseRevision: baseRevision, ResultRevision: r.WS.GitHEAD(), Error: err}, strings.Join(trace, "\n\n"), err)
 			}
 			toolStarted := time.Now()
+			r.emit(TraceEvent{Kind: "tool_start", Step: stepNumber, MaxSteps: budget.MaxSteps, ToolName: call.Function.Name, ToolArgs: call.Function.Arguments, TotalElapsed: time.Since(started)})
 			var result string
 			if call.Function.Name == "" {
 				result = "ERROR: tool call has an empty name and was ignored"
@@ -473,7 +494,7 @@ func (r *Runtime) Execute(ctx context.Context, request string, attachments ...mo
 			if strings.HasPrefix(result, "ERROR: ") {
 				obs.ToolFailures++
 			}
-			r.emit(TraceEvent{Kind: "tool", Step: stepNumber, MaxSteps: budget.MaxSteps, ToolName: call.Function.Name, ToolCalls: 1, TotalToolCalls: obs.ToolCalls, ToolResultBytes: len(result), Latency: time.Since(toolStarted), TotalElapsed: time.Since(started), ReasoningEffort: effort})
+			r.emit(TraceEvent{Kind: "tool", Step: stepNumber, MaxSteps: budget.MaxSteps, ToolName: call.Function.Name, ToolArgs: call.Function.Arguments, ToolCalls: 1, TotalToolCalls: obs.ToolCalls, ToolResultBytes: len(result), ToolResultLines: countLines(result), ToolResultHead: resultHead(result), Latency: time.Since(toolStarted), TotalElapsed: time.Since(started), ReasoningEffort: effort})
 			messages = append(messages, model.Message{Role: "tool", ToolCallID: call.ID, Content: result})
 		}
 		obs.LastToolFailure = toolFailed

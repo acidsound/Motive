@@ -2,6 +2,7 @@ package tui
 
 import (
 	"context"
+	"encoding/json"
 	"fmt"
 	"strings"
 	"time"
@@ -76,6 +77,8 @@ type message struct {
 	content     string
 	reasoning   string
 	tools       []string
+	toolArgs    []string
+	liveTool    string
 	attachments []attachItem
 	ts          time.Time
 	bookmark    bool
@@ -761,10 +764,16 @@ func (m *model) handleTrace(event runtime.TraceEvent) (tea.Model, tea.Cmd) {
 			last.reasoning += event.Reasoning
 		}
 
+	case "tool_start":
+		last := m.assistantSlot()
+		last.liveTool = liveToolLine(event.ToolName, event.ToolArgs)
+
 	case "tool":
 		m.toolCalls = event.TotalToolCalls
 		last := m.assistantSlot()
-		last.tools = append(last.tools, fmt.Sprintf("%s · %dB · %s", event.ToolName, event.ToolResultBytes, event.Latency.Round(time.Millisecond)))
+		last.tools = append(last.tools, toolSummary(event.ToolName, event.ToolArgs, event.ToolResultBytes, event.ToolResultLines, event.ToolResultHead))
+		last.toolArgs = append(last.toolArgs, toolArgsPreview(event.ToolName, event.ToolArgs))
+		last.liveTool = ""
 
 	case "finish":
 		m.busy = false
@@ -1005,12 +1014,26 @@ func (m model) renderMessage(msg message, width int) []string {
 		if c := strings.TrimSpace(msg.content); c != "" {
 			out = append(out, renderMarkdown(c, width)...)
 		}
-		if len(msg.tools) > 0 {
+		if len(msg.tools) > 0 || msg.liveTool != "" {
 			if m.toolsCollapsed {
+				// Completed calls fold into a one-line done summary; only the
+				// most recent calls stay visible so live activity is readable.
 				out = append(out, styleToolSum.Render(m.collapsedToolsSummary(msg.tools)))
+				if msg.liveTool != "" {
+					out = append(out, styleTool.Render("  ⟳ "+msg.liveTool))
+				}
+				for _, t := range recentTools(msg.tools) {
+					out = append(out, styleToolSum.Render("  → "+t))
+				}
 			} else {
-				for _, t := range msg.tools {
+				for i, t := range msg.tools {
 					out = append(out, styleTool.Render("→ "+t))
+					if i < len(msg.toolArgs) && msg.toolArgs[i] != "" {
+						out = append(out, styleReasoning.Render("    "+msg.toolArgs[i]))
+					}
+				}
+				if msg.liveTool != "" {
+					out = append(out, styleTool.Render("⟳ "+msg.liveTool))
 				}
 			}
 		}
@@ -1022,11 +1045,166 @@ func (m model) renderMessage(msg message, width int) []string {
 	return wrapStyled(msg.content, width)
 }
 
+// liveToolLine builds the one-line description shown while a tool call is
+// still running. It surfaces the most useful identifying detail per tool:
+// the command for shell, the target file for single-file tools (with an
+// affected-line count when known), the query for web_search, and a summary
+// of the fetched content for web_fetch.
+func liveToolLine(name, args string) string {
+	return toolDetail(name, args, 0, 0, "")
+}
+
+// toolSummary builds the completed one-line description for a finished tool
+// call: the identifying detail from its arguments plus a size/line hint.
+func toolSummary(name, args string, resultBytes, resultLines int, head string) string {
+	return fmt.Sprintf("%s · %dB · %s", toolDetail(name, args, resultLines, resultBytes, head), resultBytes, name)
+}
+
+// toolDetail extracts the human-relevant summary of a tool invocation.
+func toolDetail(name, args string, resultLines, resultBytes int, head string) string {
+	get := func(key string) string {
+		var m map[string]any
+		if err := json.Unmarshal([]byte(args), &m); err != nil {
+			return ""
+		}
+		s, _ := m[key].(string)
+		return s
+	}
+	switch name {
+	case "shell":
+		if cmd := get("command"); cmd != "" {
+			return truncateRunes(strings.ReplaceAll(cmd, "\n", " && "), 80)
+		}
+	case "read_file", "write_file", "edit_file", "delete_file":
+		p := get("path")
+		if p == "" {
+			p = get("file")
+		}
+		detail := p
+		if lines := affectedLines(name, args); lines > 0 {
+			detail = fmt.Sprintf("%s (%d lines)", p, lines)
+		}
+		return detail
+	case "web_search":
+		return truncateRunes(get("query"), 80)
+	case "web_fetch":
+		url := get("url")
+		if head != "" {
+			return fmt.Sprintf("%s · %s", url, truncateRunes(head, 60))
+		}
+		return url
+	}
+	return ""
+}
+
+// affectedLines reports how many lines of a file a read/write/edit touches,
+// or 0 when it cannot be determined.
+func affectedLines(name, args string) int {
+	var m map[string]any
+	if err := json.Unmarshal([]byte(args), &m); err != nil {
+		return 0
+	}
+	num := func(key string) int {
+		f, _ := m[key].(float64)
+		return int(f)
+	}
+	str := func(key string) string {
+		s, _ := m[key].(string)
+		return s
+	}
+	switch name {
+	case "read_file":
+		if lim := num("limit"); lim > 0 {
+			return lim
+		}
+	case "write_file":
+		if c := str("content"); c != "" {
+			return strings.Count(strings.TrimSuffix(c, "\n"), "\n") + 1
+		}
+	case "edit_file":
+		oldS, newS := str("old_string"), str("new_string")
+		n := strings.Count(str("content")+oldS+newS, "\n")
+		if oldS != "" || newS != "" {
+			return n + 1
+		}
+	}
+	return 0
+}
+
+// maxRecentTools is how many of the most recent tool calls stay individually
+// visible while the tools are collapsed; older calls fold into the summary.
+const maxRecentTools = 3
+
+// recentTools returns the trailing slice of tool calls that remain expanded
+// while collapsed (at most maxRecentTools). For short lists it returns nil so
+// the summary alone is shown without duplicating entries.
+func recentTools(tools []string) []string {
+	if len(tools) <= 1 {
+		return nil
+	}
+	start := len(tools) - min(maxRecentTools, len(tools)-1)
+	if start <= 0 {
+		return nil
+	}
+	return tools[start:]
+}
+
+// toolArgsPreview builds a compact one-line preview of a tool call's arguments
+// for the expanded tools view. It flattens JSON-ish args to "key=value" pairs
+// and truncates long values.
+func toolArgsPreview(name, args string) string {
+	args = strings.TrimSpace(args)
+	if args == "" || args == "{}" {
+		return ""
+	}
+	var pairs []string
+	dec := json.NewDecoder(strings.NewReader(args))
+	if tok, err := dec.Token(); err == nil {
+		if m, ok := tok.(json.Delim); ok && m == '{' {
+			for dec.More() {
+				keyTok, err := dec.Token()
+				if err != nil {
+					break
+				}
+				key, ok := keyTok.(string)
+				if !ok {
+					break
+				}
+				var val any
+				if err := dec.Decode(&val); err != nil {
+					break
+				}
+				s := fmt.Sprint(val)
+				if str, ok := val.(string); ok {
+					s = strings.ReplaceAll(str, "\n", "\\n")
+				}
+				pairs = append(pairs, fmt.Sprintf("%s=%s", key, truncateRunes(s, 80)))
+			}
+		}
+	}
+	if len(pairs) == 0 {
+		return truncateRunes(strings.ReplaceAll(args, "\n", "\\n"), 120)
+	}
+	return strings.Join(pairs, " ")
+}
+
+// truncateRunes shortens s to at most max runes, appending an ellipsis.
+func truncateRunes(s string, max int) string {
+	r := []rune(s)
+	if len(r) <= max {
+		return s
+	}
+	return string(r[:max]) + "…"
+}
+
 // collapsedToolsSummary builds the one-line summary shown for a message's
-// tool calls while they are collapsed: the total count plus the most recent
-// call's details, so the latest activity stays visible without expanding.
+// tool calls while they are collapsed: completed calls plus a live tail of
+// the most recent calls, so the latest activity stays visible.
 func (m model) collapsedToolsSummary(tools []string) string {
 	summary := fmt.Sprintf("⏺ %d tool calls", len(tools))
+	if done := len(tools) - len(recentTools(tools)); done > 0 {
+		summary += fmt.Sprintf(" · ✓ %d done", done)
+	}
 	if last := tools[len(tools)-1]; last != "" {
 		summary += " · last: " + last
 	}
