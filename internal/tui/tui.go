@@ -452,7 +452,9 @@ func (m *model) handleKey(msg tea.KeyPressMsg) (tea.Model, tea.Cmd) {
 		}
 		return m, pasteImageCmd()
 
-	case string(m.keys.Help):
+	case string(m.keys.Help), "alt+h":
+		// alt+h is an alias for help: macOS Terminal.app's default keyboard
+		// profiles often swallow ctrl+/ (it is not delivered to the app).
 		m.toggleHelp()
 		return m, nil
 
@@ -1589,8 +1591,8 @@ func buildHelpLines(k Keymap) []string {
 		{string(k.UnitsPanel), "Unit executions"},
 		{string(k.ToolsToggle), "Toggle tools"},
 		{string(k.AttachFile), "Attach file"},
-		{string(k.PasteImage), "Paste clipboard image"},
-		{string(k.Help), "Toggle help (this)"},
+		{string(k.PasteImage), "Paste image"},
+		{string(k.Help) + " / alt+h", "Toggle help (this)"},
 		{string(k.ScrollUp), "Scroll up"},
 		{string(k.ScrollDown), "Scroll down"},
 		{string(k.PageUp), "Page up"},
