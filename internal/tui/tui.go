@@ -1575,12 +1575,14 @@ func (m model) renderRightColumn(panelH int) []string {
 }
 
 // helpPanelWidth sizes the help side panel: wide enough for the widest
-// keybindings row, capped so the transcript keeps at least 20 columns.
+// keybinding label, capped so the transcript keeps at least 20 columns.
 func helpPanelWidth(width int) int {
 	keyW := 0
 	for _, r := range buildHelpRows(DefaultKeymap()) {
-		if len(r.keys) > keyW {
-			keyW = len(r.keys)
+		for _, key := range r.keys {
+			if len(key) > keyW {
+				keyW = len(key)
+			}
 		}
 	}
 	w := keyW + 2 + maxDescLen + 4 // indent + gap + desc + margin
@@ -1596,36 +1598,38 @@ func helpPanelWidth(width int) int {
 	return w
 }
 
-// helpRow is one keybindings panel row.
+// helpRow is one keybindings panel row. An action bound to several keys
+// lists them as separate rows (one key per line) instead of joining them
+// with " / ", so every key stays scannable in its own column.
 type helpRow struct {
-	keys string
+	keys []string
 	desc string
 }
 
 // buildHelpRows returns the keybinding rows shown in the help panel.
 func buildHelpRows(k Keymap) []helpRow {
 	return []helpRow{
-		{string(k.Run), "Send"},
-		{string(k.CycleQueueMode), "Cycle steer/queue"},
-		{string(k.Stop), "Stop"},
-		{string(k.Newline) + " / alt+enter", "Insert newline"},
-		{string(k.CycleEffort), "Cycle effort"},
-		{string(k.SessionPicker), "Session picker"},
-		{string(k.DiffToggle), "Git diff"},
-		{string(k.UnitsPanel), "Unit executions"},
-		{string(k.ToolsToggle), "Toggle tools"},
-		{string(k.AttachFile), "Attach file"},
-		{string(k.PasteImage), "Paste image"},
-		{string(k.Help) + " / alt+h", "Toggle help (this)"},
-		{string(k.ScrollUp), "Scroll up"},
-		{string(k.ScrollDown), "Scroll down"},
-		{string(k.PageUp), "Page up"},
-		{string(k.PageDown), "Page down"},
-		{string(k.HistoryUp), "History up"},
-		{string(k.HistoryDown), "History down"},
-		{string(k.Bookmark), "Bookmark message"},
-		{string(k.Clear), "Clear transcript"},
-		{string(k.Quit), "Quit"},
+		{[]string{string(k.Run)}, "Send"},
+		{[]string{string(k.CycleQueueMode)}, "Cycle steer/queue"},
+		{[]string{string(k.Stop)}, "Stop"},
+		{[]string{string(k.Newline), "alt+enter"}, "Insert newline"},
+		{[]string{string(k.CycleEffort)}, "Cycle effort"},
+		{[]string{string(k.SessionPicker)}, "Session picker"},
+		{[]string{string(k.DiffToggle)}, "Git diff"},
+		{[]string{string(k.UnitsPanel)}, "Unit executions"},
+		{[]string{string(k.ToolsToggle)}, "Toggle tools"},
+		{[]string{string(k.AttachFile)}, "Attach file"},
+		{[]string{string(k.PasteImage)}, "Paste image"},
+		{[]string{string(k.Help), "alt+h"}, "Toggle help (this)"},
+		{[]string{string(k.ScrollUp)}, "Scroll up"},
+		{[]string{string(k.ScrollDown)}, "Scroll down"},
+		{[]string{string(k.PageUp)}, "Page up"},
+		{[]string{string(k.PageDown)}, "Page down"},
+		{[]string{string(k.HistoryUp)}, "History up"},
+		{[]string{string(k.HistoryDown)}, "History down"},
+		{[]string{string(k.Bookmark)}, "Bookmark message"},
+		{[]string{string(k.Clear)}, "Clear transcript"},
+		{[]string{string(k.Quit)}, "Quit"},
 	}
 }
 
@@ -1640,22 +1644,49 @@ var maxDescLen = func() int {
 	return m
 }()
 
-// buildHelpLines returns styled rows for the help box.
+// buildHelpLines returns styled rows for the help box. Each row's key column
+// stacks one binding per line; the description column word-wraps within its
+// fixed width so long descriptions wrap inside their own cell instead of
+// pushing the layout wider.
 func buildHelpLines(k Keymap) []string {
 	rows := buildHelpRows(k)
 	keyW := 0
 	for _, r := range rows {
-		if len(r.keys) > keyW {
-			keyW = len(r.keys)
+		for _, key := range r.keys {
+			if len(key) > keyW {
+				keyW = len(key)
+			}
 		}
 	}
+	descW := maxDescLen
 	keyStyle := lipgloss.NewStyle().Foreground(lipgloss.Color(colorPrompt)).Width(keyW)
-	descStyle := lipgloss.NewStyle().Foreground(lipgloss.Color(colorAssistant))
+	descStyle := lipgloss.NewStyle().Foreground(lipgloss.Color(colorAssistant)).Width(descW)
 	out := []string{stylePanelHeading.Render("Keybindings")}
 	for _, r := range rows {
-		out = append(out, "  "+keyStyle.Render(r.keys)+"  "+descStyle.Render(r.desc))
+		descLines := wrapCell(r.desc, descW)
+		height := max(len(r.keys), len(descLines))
+		for i := 0; i < height; i++ {
+			key := ""
+			if i < len(r.keys) {
+				key = r.keys[i]
+			}
+			desc := ""
+			if i < len(descLines) {
+				desc = descLines[i]
+			}
+			out = append(out, "  "+keyStyle.Render(key)+"  "+descStyle.Render(desc))
+		}
 	}
 	return out
+}
+
+// wrapCell word-wraps s to at most width display columns per line.
+func wrapCell(s string, width int) []string {
+	if width < 1 {
+		width = 1
+	}
+	wrapped := ansi.Wordwrap(s, width, "")
+	return strings.Split(wrapped, "\n")
 }
 
 // panelWindow returns the visible slice of the panel content for the given
