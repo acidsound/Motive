@@ -402,7 +402,11 @@ func (m *model) handleKey(msg tea.KeyPressMsg) (tea.Model, tea.Cmd) {
 		}
 		return m.submit()
 
-	case string(m.keys.Newline):
+	case string(m.keys.Newline), "alt+enter":
+		// alt+enter is an alias for the newline binding: macOS Terminal.app
+		// does not distinguish shift+enter from enter (both arrive as plain
+		// enter, which submits), so alt+enter is the portable insert-newline
+		// key without changing terminal settings.
 		m.input.InsertString("\n")
 		m.syncInputHeight()
 		return m, nil
@@ -1447,13 +1451,9 @@ func (m *model) View() tea.View {
 	statusH := lineCount(status)
 	panelW := 0
 	if m.helpOpen {
-		panelW = min(36, width/3)
-		if panelW < 24 {
-			panelW = 24
-		}
-		if width-panelW-1 < 20 {
-			panelW = max(0, width-21)
-		}
+		// Size the panel to its widest row so long key labels like
+		// "shift+enter / alt+enter" are not clipped by a fixed cap.
+		panelW = helpPanelWidth(width)
 	}
 	bodyW := width - panelW - 1
 	if bodyW < 20 {
@@ -1574,17 +1574,41 @@ func (m model) renderRightColumn(panelH int) []string {
 	return panelWindow(lines, 0, panelH)
 }
 
-// buildHelpLines returns styled rows for the help box.
-func buildHelpLines(k Keymap) []string {
-	type row struct {
-		keys string
-		desc string
+// helpPanelWidth sizes the help side panel: wide enough for the widest
+// keybindings row, capped so the transcript keeps at least 20 columns.
+func helpPanelWidth(width int) int {
+	keyW := 0
+	for _, r := range buildHelpRows(DefaultKeymap()) {
+		if len(r.keys) > keyW {
+			keyW = len(r.keys)
+		}
 	}
-	rows := []row{
+	w := keyW + 2 + maxDescLen + 4 // indent + gap + desc + margin
+	if w < 24 {
+		w = 24
+	}
+	if w > width/2 {
+		w = width / 2
+	}
+	if w < 24 {
+		w = min(24, width)
+	}
+	return w
+}
+
+// helpRow is one keybindings panel row.
+type helpRow struct {
+	keys string
+	desc string
+}
+
+// buildHelpRows returns the keybinding rows shown in the help panel.
+func buildHelpRows(k Keymap) []helpRow {
+	return []helpRow{
 		{string(k.Run), "Send"},
 		{string(k.CycleQueueMode), "Cycle steer/queue"},
 		{string(k.Stop), "Stop"},
-		{string(k.Newline), "Insert newline"},
+		{string(k.Newline) + " / alt+enter", "Insert newline"},
 		{string(k.CycleEffort), "Cycle effort"},
 		{string(k.SessionPicker), "Session picker"},
 		{string(k.DiffToggle), "Git diff"},
@@ -1603,6 +1627,22 @@ func buildHelpLines(k Keymap) []string {
 		{string(k.Clear), "Clear transcript"},
 		{string(k.Quit), "Quit"},
 	}
+}
+
+// maxDescLen is the width of the widest description in the help rows.
+var maxDescLen = func() int {
+	m := 0
+	for _, r := range buildHelpRows(DefaultKeymap()) {
+		if len(r.desc) > m {
+			m = len(r.desc)
+		}
+	}
+	return m
+}()
+
+// buildHelpLines returns styled rows for the help box.
+func buildHelpLines(k Keymap) []string {
+	rows := buildHelpRows(k)
 	keyW := 0
 	for _, r := range rows {
 		if len(r.keys) > keyW {
