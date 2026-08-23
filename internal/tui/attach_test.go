@@ -183,7 +183,7 @@ func TestAttachOverlayCommitsFile(t *testing.T) {
 	m.width = 80
 	m.height = 24
 	// Remove the ws-root line; newTestModel already has rt.WS == nil.
-	m2, _ := m.handleKey(teaKey("ctrl+a"))
+	m2, _ := m.handleKey(teaKey("alt+a"))
 	m = *m2.(*model)
 	if m.overlay != overlayAttach {
 		t.Fatalf("overlay = %v, want attach", m.overlay)

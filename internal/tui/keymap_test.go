@@ -24,6 +24,17 @@ func TestDefaultKeymap(t *testing.T) {
 	if k.CycleQueueMode != "ctrl+\\" {
 		t.Errorf("CycleQueueMode = %q, want ctrl+\\", k.CycleQueueMode)
 	}
+	// Readline-collision policy: cmd+backspace (ctrl+u), cmd+left (ctrl+a)
+	// and cmd+right (ctrl+e) must not be shadowed by overlay bindings.
+	if k.UnitsPanel != "alt+u" {
+		t.Errorf("UnitsPanel = %q, want alt+u", k.UnitsPanel)
+	}
+	if k.AttachFile != "alt+a" {
+		t.Errorf("AttachFile = %q, want alt+a", k.AttachFile)
+	}
+	if k.CycleEffort != "alt+e" {
+		t.Errorf("CycleEffort = %q, want alt+e", k.CycleEffort)
+	}
 }
 
 func TestKeymapApplyEnv(t *testing.T) {

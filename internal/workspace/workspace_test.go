@@ -1,9 +1,12 @@
 package workspace
 
 import (
+	"fmt"
+	"maps"
 	"os"
 	"os/exec"
 	"path/filepath"
+	"slices"
 	"strings"
 	"testing"
 )
@@ -59,7 +62,8 @@ func gitTestRepo(t *testing.T, files map[string]string) string {
 	if out, err := exec.Command("git", "-C", dir, "config", "user.name", "Test User").CombinedOutput(); err != nil {
 		t.Fatalf("set user.name: %v (%s)", err, strings.TrimSpace(string(out)))
 	}
-	for name, content := range files {
+	for i, name := range slices.Sorted(maps.Keys(files)) {
+		content := files[name]
 		p := filepath.Join(dir, filepath.FromSlash(name))
 		if err := os.MkdirAll(filepath.Dir(p), 0o755); err != nil {
 			t.Fatal(err)
@@ -70,7 +74,15 @@ func gitTestRepo(t *testing.T, files map[string]string) string {
 		if out, err := exec.Command("git", "-C", dir, "add", name).CombinedOutput(); err != nil {
 			t.Fatalf("git add %s: %v (%s)", name, err, strings.TrimSpace(string(out)))
 		}
-		if out, err := exec.Command("git", "-C", dir, "commit", "-q", "-m", "commit "+name).CombinedOutput(); err != nil {
+		// Give each commit a distinct timestamp so git log's newest-first
+		// ordering is deterministic even when commits land in the same second.
+		env := append(os.Environ(),
+			"GIT_AUTHOR_DATE=2026-01-01T00:00:"+fmt.Sprintf("%02d", i+1)+" +0000",
+			"GIT_COMMITTER_DATE=2026-01-01T00:00:"+fmt.Sprintf("%02d", i+1)+" +0000",
+		)
+		cmd := exec.Command("git", "-C", dir, "commit", "-q", "-m", "commit "+name)
+		cmd.Env = env
+		if out, err := cmd.CombinedOutput(); err != nil {
 			t.Fatalf("git commit %s: %v (%s)", name, err, strings.TrimSpace(string(out)))
 		}
 	}

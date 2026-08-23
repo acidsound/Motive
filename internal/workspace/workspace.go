@@ -12,6 +12,7 @@ import (
 	"runtime"
 	"strconv"
 	"strings"
+	"syscall"
 	"time"
 )
 
@@ -357,11 +358,23 @@ func (w *Workspace) command(parent context.Context, timeout time.Duration, name 
 	defer cancel()
 	cmd := exec.CommandContext(ctx, name, args...)
 	cmd.Dir = w.Root
+	// A long-running child that inherits our stdout/stderr (e.g.
+	// "python3 -m http.server") would keep the pipes open forever after the
+	// context deadline kills the shell, blocking cmd.Run() indefinitely.
+	// WaitDelay bounds that wait: once the process exits (or is killed) and
+	// WaitDelay elapses, Wait stops waiting on inherited pipes.
+	cmd.WaitDelay = 5 * time.Second
+	if runtime.GOOS != "windows" {
+		// Kill the whole process group, not just the shell, so grandchildren
+		// started in the foreground die with it.
+		cmd.SysProcAttr = &syscall.SysProcAttr{Setpgid: true}
+	}
 	out := cappedBuffer{limit: maxCommandOutputBytes}
 	cmd.Stdout = &out
 	cmd.Stderr = &out
 	err := cmd.Run()
 	if ctx.Err() != nil {
+		killGroup(cmd)
 		return out.String(), ctx.Err()
 	}
 	if err != nil {
@@ -392,6 +405,18 @@ func (c *cappedBuffer) Write(p []byte) (int, error) {
 
 func (c *cappedBuffer) String() string {
 	return c.buf.String()
+}
+
+// killGroup terminates the command's process group (falling back to the
+// process itself) after a context deadline. It is best-effort.
+func killGroup(cmd *exec.Cmd) {
+	if cmd.Process == nil {
+		return
+	}
+	neg := -cmd.Process.Pid // negative pid signals the whole group
+	if err := syscall.Kill(neg, syscall.SIGKILL); err != nil {
+		_ = cmd.Process.Kill()
+	}
 }
 
 func (w *Workspace) GitStatus() (string, error) {

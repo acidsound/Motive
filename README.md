@@ -145,10 +145,10 @@ Controls (rebindable via `MOTIVE_KEY_<NAME>`, e.g.
 `MOTIVE_KEY_SCROLL_UP=ctrl+u`):
 
 ```text
-enter          run (busy: steer/queue)   ctrl+e   cycle reasoning effort
+enter          run (busy: steer/queue)   alt+e    cycle reasoning effort
 shift+enter    newline                   ctrl+r   session picker
 ctrl+d         git diff view             ctrl+t   toggle tools
-ctrl+a         attach file               ctrl+y   paste clipboard image
+alt+a          attach file               ctrl+y   paste clipboard image
 ctrl+\         cycle steer/queue (busy)  ctrl+/   toggle help
 ctrl+k / ctrl+j                         scroll up / down
 ctrl+shift+k / ctrl+shift+j             page up / down
@@ -158,7 +158,12 @@ esc            stop run (busy) / close help
 ctrl+c         quit
 ```
 
-`ctrl+a` opens a file browser rooted at the workspace: type a path (absolute,
+macOS 터미널의 "natural text editing" 프로필이 `cmd+backspace`→`ctrl+u`,
+`cmd+←`→`ctrl+a`, `cmd+→`→`ctrl+e`를 보내기 때문에, 이 세 readline 키는
+오버레이 바인딩에 쓰지 않는다(각각 alt+u, alt+a, alt+e로 대체).
+`MOTIVE_KEY_<NAME>`으로 언제든 재바인딩할 수 있다.
+
+`alt+a` opens a file browser rooted at the workspace: type a path (absolute,
 `~`, or relative) or filter the current directory by name, then `enter` to
 attach. `ctrl+y` grabs an image from the clipboard (macOS via osascript,
 Linux via `wl-paste`/`xclip`); if the terminal supports inline images
