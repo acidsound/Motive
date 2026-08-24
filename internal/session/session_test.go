@@ -231,7 +231,6 @@ func TestFormatEntryUnitBoundaryNotTruncated(t *testing.T) {
 	}
 }
 
-
 func TestFullLogIsSeparateFromTranscript(t *testing.T) {
 	dir := t.TempDir()
 	s, err := NewStore(dir)
