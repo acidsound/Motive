@@ -13,36 +13,36 @@ type Binding string
 // comparable action exists; each binding can be overridden with a
 // MOTIVE_KEY_<NAME> environment variable (e.g. MOTIVE_KEY_SCROLL_UP=ctrl+k).
 type Keymap struct {
-	Quit             Binding
-	Stop             Binding
-	Run              Binding
-	Newline          Binding
-	CycleEffort      Binding
-	CycleQueueMode   Binding
-	SessionPicker    Binding
-	DiffToggle       Binding
-	UnitsPanel       Binding
-	ToolsToggle      Binding
-	ReasoningToggle  Binding
-	AttachFile       Binding
-	PasteImage       Binding
-	ScrollUp         Binding
-	ScrollDown       Binding
-	PageUp           Binding
-	PageDown         Binding
-	HistoryUp        Binding
-	HistoryDown      Binding
-	Bookmark         Binding
-	Clear            Binding
-	Help             Binding
+	Quit            Binding
+	Stop            Binding
+	Run             Binding
+	Newline         Binding
+	CycleEffort     Binding
+	CycleQueueMode  Binding
+	SessionPicker   Binding
+	DiffToggle      Binding
+	UnitsPanel      Binding
+	ToolsToggle     Binding
+	ReasoningToggle Binding
+	AttachFile      Binding
+	PasteImage      Binding
+	ScrollUp        Binding
+	ScrollDown      Binding
+	PageUp          Binding
+	PageDown        Binding
+	HistoryUp       Binding
+	HistoryDown     Binding
+	Bookmark        Binding
+	Clear           Binding
+	Help            Binding
 }
 
 func DefaultKeymap() Keymap {
 	return Keymap{
-		Quit:            "ctrl+c",
-		Stop:            "esc",
-		Run:             "enter",
-		Newline:         "shift+enter",
+		Quit:    "ctrl+c",
+		Stop:    "esc",
+		Run:     "enter",
+		Newline: "shift+enter",
 		// Readline-collision policy: never bind plain ctrl+<letter> keys that
 		// macOS terminal "natural text editing" profiles send for cmd+backspace
 		// (ctrl+u), cmd+left (ctrl+a), and cmd+right (ctrl+e) — hijacking
