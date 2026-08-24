@@ -27,15 +27,15 @@ import (
 // (status, revision delta, budget usage) of a one-shot execution; its Content
 // is one compact JSON line.
 type Entry struct {
-	TS             time.Time `json:"ts"`
-	Role           string    `json:"role"` // user | assistant | error | tool | stopped | unit
-	Content        string    `json:"content,omitempty"`
-	Reasoning      string    `json:"reasoning,omitempty"`
-	Tools          []string  `json:"tools,omitempty"`
+	TS             time.Time          `json:"ts"`
+	Role           string             `json:"role"` // user | assistant | error | tool | stopped | unit
+	Content        string             `json:"content,omitempty"`
+	Reasoning      string             `json:"reasoning,omitempty"`
+	Tools          []string           `json:"tools,omitempty"`
 	Attachments    []model.Attachment `json:"attachments,omitempty"`
-	BaseRevision   string    `json:"base_revision,omitempty"`
-	ResultRevision string    `json:"result_revision,omitempty"`
-	ElapsedMS      int64     `json:"elapsed_ms,omitempty"`
+	BaseRevision   string             `json:"base_revision,omitempty"`
+	ResultRevision string             `json:"result_revision,omitempty"`
+	ElapsedMS      int64              `json:"elapsed_ms,omitempty"`
 }
 
 // Summary describes a session for the picker without loading its transcript.

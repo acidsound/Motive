@@ -6,9 +6,9 @@ import (
 	"strconv"
 	"strings"
 
+	"charm.land/lipgloss/v2"
 	"github.com/acidsound/Motive/internal/runtime"
 	"github.com/acidsound/Motive/internal/session"
-	"charm.land/lipgloss/v2"
 )
 
 // unitRecord is one entry in the units overlay: a unit boundary record plus

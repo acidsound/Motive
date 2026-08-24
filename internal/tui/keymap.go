@@ -39,10 +39,10 @@ type Keymap struct {
 
 func DefaultKeymap() Keymap {
 	return Keymap{
-		Quit:            "ctrl+c",
-		Stop:            "esc",
-		Run:             "enter",
-		Newline:         "shift+enter",
+		Quit:    "ctrl+c",
+		Stop:    "esc",
+		Run:     "enter",
+		Newline: "shift+enter",
 		// Readline-collision policy: never bind plain ctrl+<letter> keys that
 		// macOS terminal "natural text editing" profiles send for cmd+backspace
 		// (ctrl+u), cmd+left (ctrl+a), and cmd+right (ctrl+e) — hijacking
