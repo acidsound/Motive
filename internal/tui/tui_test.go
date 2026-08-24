@@ -492,7 +492,6 @@ func TestScrollPositionInInputArea(t *testing.T) {
 	}
 }
 
-
 func TestFullLogCapturesReasoningWithoutTranscriptLeak(t *testing.T) {
 	s, err := session.NewStore(t.TempDir())
 	if err != nil {
