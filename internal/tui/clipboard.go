@@ -7,6 +7,7 @@ import (
 	"runtime"
 
 	tea "charm.land/bubbletea/v2"
+
 	llm "github.com/acidsound/Motive/internal/model"
 )
 
