@@ -1,6 +1,7 @@
 package tui
 
 import (
+	"fmt"
 	"strconv"
 	"strings"
 	"testing"
