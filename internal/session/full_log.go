@@ -15,15 +15,15 @@ import (
 // may contain reasoning and streaming detail, while Entry remains the compact
 // transcript that Motive can inspect through session_log.
 type FullEvent struct {
-	TS       time.Time       `json:"ts"`
-	Kind     string          `json:"kind"`
-	Step     int             `json:"step,omitempty"`
-	MaxSteps int             `json:"max_steps,omitempty"`
-	ToolName string          `json:"tool_name,omitempty"`
-	ToolArgs string          `json:"tool_args,omitempty"`
-	Text     string          `json:"text,omitempty"`
+	TS        time.Time       `json:"ts"`
+	Kind      string          `json:"kind"`
+	Step      int             `json:"step,omitempty"`
+	MaxSteps  int             `json:"max_steps,omitempty"`
+	ToolName  string          `json:"tool_name,omitempty"`
+	ToolArgs  string          `json:"tool_args,omitempty"`
+	Text      string          `json:"text,omitempty"`
 	Reasoning string         `json:"reasoning,omitempty"`
-	Error    string          `json:"error,omitempty"`
+	Error     string          `json:"error,omitempty"`
 	Data     json.RawMessage `json:"data,omitempty"`
 }
 
