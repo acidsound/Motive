@@ -230,3 +230,43 @@ func TestFormatEntryUnitBoundaryNotTruncated(t *testing.T) {
 		t.Errorf("unit boundary JSON was truncated: %q", got)
 	}
 }
+
+func TestFullLogIsSeparateFromTranscript(t *testing.T) {
+	dir := t.TempDir()
+	s, err := NewStore(dir)
+	if err != nil {
+		t.Fatal(err)
+	}
+	id, err := s.New()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := s.Append(id, Entry{Role: "user", Content: "request"}); err != nil {
+		t.Fatal(err)
+	}
+	if err := s.AppendFull(id, FullEvent{Kind: "trace.delta", Text: "visible", Reasoning: "private reasoning"}); err != nil {
+		t.Fatal(err)
+	}
+
+	entries, err := s.Load(id)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(entries) != 1 {
+		t.Fatalf("transcript entries = %d, want 1", len(entries))
+	}
+	if strings.Contains(FormatEntry(entries[0]), "private reasoning") {
+		t.Fatal("full-log reasoning leaked into transcript")
+	}
+
+	full, err := s.LoadFull(id)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(full) != 1 || full[0].Reasoning != "private reasoning" {
+		t.Fatalf("full log = %+v", full)
+	}
+	if _, err := os.Stat(s.FullLogPath(id)); err != nil {
+		t.Fatalf("full log path missing: %v", err)
+	}
+}

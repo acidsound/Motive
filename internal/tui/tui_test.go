@@ -491,3 +491,51 @@ func TestScrollPositionInInputArea(t *testing.T) {
 		t.Errorf("view missing scroll position %q:\n%s", want, view.Content)
 	}
 }
+
+func TestFullLogCapturesReasoningWithoutTranscriptLeak(t *testing.T) {
+	s, err := session.NewStore(t.TempDir())
+	if err != nil {
+		t.Fatal(err)
+	}
+	id, err := s.New()
+	if err != nil {
+		t.Fatal(err)
+	}
+	m := newTestModel()
+	m.sess = s
+	m.sessionID = id
+	m.messages = []message{{role: "assistant"}}
+
+	event := runtime.TraceEvent{
+		Kind:      "delta",
+		Step:      1,
+		MaxSteps:  4,
+		Text:      "visible",
+		Reasoning: "hidden reasoning",
+	}
+	m.handleTrace(event)
+
+	full, err := s.LoadFull(id)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(full) != 1 {
+		t.Fatalf("full events = %d, want 1", len(full))
+	}
+	if full[0].Kind != "trace.delta" || full[0].Reasoning != "hidden reasoning" {
+		t.Fatalf("full event = %+v", full[0])
+	}
+
+	if err := s.Append(id, session.Entry{Role: "assistant", Content: "visible"}); err != nil {
+		t.Fatal(err)
+	}
+	entries, err := s.Load(id)
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, entry := range entries {
+		if strings.Contains(entry.Reasoning, "hidden reasoning") || strings.Contains(entry.Content, "hidden reasoning") {
+			t.Fatal("full-log reasoning leaked into model-visible transcript")
+		}
+	}
+}
