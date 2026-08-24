@@ -7,7 +7,6 @@ import (
 	"strings"
 
 	"charm.land/lipgloss/v2"
-
 	"github.com/acidsound/Motive/internal/runtime"
 	"github.com/acidsound/Motive/internal/session"
 )
