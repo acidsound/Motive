@@ -669,6 +669,7 @@ func (m *model) startTurn(request string, attachments []attachItem) (tea.Model, 
 		})
 	}
 
+	m.appendFull("user_input", nil, request, "", "")
 	m.appendMessage(message{role: "assistant", ts: time.Now()})
 	return m, m.startExecution(request, attachments)
 }
@@ -714,6 +715,7 @@ func (m *model) submitBusy() (tea.Model, tea.Cmd) {
 					Content: request,
 				})
 			}
+			m.appendFull("steer_input", nil, request, "", "")
 			return m, nil
 		default:
 			// Steer channel full: queue the message instead.
@@ -725,6 +727,7 @@ func (m *model) submitBusy() (tea.Model, tea.Cmd) {
 
 // stopExecution cancels the in-flight run and marks it as a user stop.
 func (m *model) stopExecution() {
+	m.appendFull("stop_requested", nil, "", "", "")
 	if m.stopCancel != nil {
 		m.stopCancel()
 	}
@@ -740,6 +743,7 @@ func (m *model) persistStopped() {
 		return
 	}
 	m.stoppedPersisted = true
+	m.appendFull("execution_stopped", nil, "stopped by user", "", "")
 	m.saveAssistantEntry()
 	m.appendMessage(message{role: "stopped", content: "stopped by user", ts: time.Now()})
 	if m.sess != nil && m.sessionID != "" {
@@ -784,6 +788,7 @@ func (m *model) finishTurn(done doneMsg) (tea.Model, tea.Cmd) {
 		// budget error still records its in-progress work. saveAssistantEntry
 		// is a no-op when the assistant slot was dropped above.
 		m.saveAssistantEntry()
+		m.appendFull("execution_error", nil, "", "", done.err.Error())
 		m.appendMessage(message{role: "error", content: done.err.Error(), ts: time.Now()})
 		if m.sess != nil && m.sessionID != "" {
 			_ = m.sess.Append(m.sessionID, session.Entry{
@@ -805,6 +810,7 @@ func (m *model) finishTurn(done doneMsg) (tea.Model, tea.Cmd) {
 		slot := m.assistantSlot()
 		slot.content = text
 	}
+	m.appendFull("execution_completed", nil, done.text, "", "")
 	m.saveAssistantEntry()
 	m.scroll = 0
 	// Continue with queued requests, if any.
@@ -831,6 +837,32 @@ func (m *model) saveAssistantEntry() {
 	})
 }
 
+// appendFull records the complete runtime observation stream separately from
+// the compact session transcript. The normal transcript remains the only
+// session data exposed to the model through session_log.
+func (m *model) appendFull(kind string, event *runtime.TraceEvent, text, reasoning, errText string) {
+	if m.sess == nil || m.sessionID == "" {
+		return
+	}
+	rec := session.FullEvent{TS: time.Now(), Kind: kind, Text: text, Reasoning: reasoning, Error: errText}
+	if event != nil {
+		rec.Step = event.Step
+		rec.MaxSteps = event.MaxSteps
+		rec.ToolName = event.ToolName
+		rec.ToolArgs = event.ToolArgs
+		if rec.Text == "" {
+			rec.Text = event.Text
+		}
+		if rec.Reasoning == "" {
+			rec.Reasoning = event.Reasoning
+		}
+		if rec.Error == "" && event.Error != nil {
+			rec.Error = event.Error.Error()
+		}
+	}
+	_ = m.sess.AppendFull(m.sessionID, rec)
+}
+
 func (m *model) handleTrace(event runtime.TraceEvent) (tea.Model, tea.Cmd) {
 	// While a user stop is in progress, ignore late stream events so they do
 	// not touch the transcript after the "stopped" entry is recorded, and so
@@ -838,6 +870,7 @@ func (m *model) handleTrace(event runtime.TraceEvent) (tea.Model, tea.Cmd) {
 	if m.stopping {
 		return m, nil
 	}
+	m.appendFull("trace."+event.Kind, &event, "", "", "")
 	m.elapsed = event.TotalElapsed
 	switch event.Kind {
 	case "start":
