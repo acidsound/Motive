@@ -22,9 +22,9 @@ type FullEvent struct {
 	ToolName  string          `json:"tool_name,omitempty"`
 	ToolArgs  string          `json:"tool_args,omitempty"`
 	Text      string          `json:"text,omitempty"`
-	Reasoning string         `json:"reasoning,omitempty"`
+	Reasoning string          `json:"reasoning,omitempty"`
 	Error     string          `json:"error,omitempty"`
-	Data     json.RawMessage `json:"data,omitempty"`
+	Data      json.RawMessage `json:"data,omitempty"`
 }
 
 // FullLogPath returns the append-only observational log path for a session.
