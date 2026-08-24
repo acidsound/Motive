@@ -7,10 +7,10 @@ import (
 
 	tea "charm.land/bubbletea/v2"
 	"github.com/acidsound/Motive/internal/config"
-	"github.com/charmbracelet/x/ansi"
 	llm "github.com/acidsound/Motive/internal/model"
 	"github.com/acidsound/Motive/internal/runtime"
 	"github.com/acidsound/Motive/internal/session"
+	"github.com/charmbracelet/x/ansi"
 )
 
 func newTestModel() model {
@@ -271,6 +271,35 @@ func TestHelpBoxHugsContentNoBottomBlank(t *testing.T) {
 	}
 	if s := strings.TrimSpace(ansi.Strip(box[len(box)-2])); s == "" {
 		t.Errorf("row above the box bottom border is blank (box covers its bottom with whitespace): %q", box[len(box)-2])
+	}
+}
+
+// TestOverlayLinesPreservesTranscriptBelowBox locks in the floating-overlay
+// rule: a box at (x, y) covering w x h must only blank the cells it actually
+// covers. Rows below the box's bottom edge (row >= y+h) must keep their full
+// transcript content, including the right columns (col >= x) — they must not
+// be erased to whitespace.
+func TestOverlayLinesPreservesTranscriptBelowBox(t *testing.T) {
+	// Each base row is exactly 8 cols: left half (col 0-3) and right half
+	// (col 4-7) carry distinct content so a blanked right half is detectable.
+	base := []string{"00001111", "22223333", "44445555", "66667777", "88889999"}
+	top := []string{"XXXX", "YYYY"} // a 2-row box, 4 cols wide
+	got := overlayLines(base, top, 4, 0, 8, 5)
+	if len(got) != 5 {
+		t.Fatalf("rows = %d, want 5", len(got))
+	}
+	// Box rows: left transcript kept, box drawn over the right portion.
+	if got[0] != "0000XXXX" {
+		t.Errorf("row0 = %q, want 0000XXXX", got[0])
+	}
+	if got[1] != "2222YYYY" {
+		t.Errorf("row1 = %q, want 2222YYYY", got[1])
+	}
+	// Rows below the box: full transcript preserved (right half not blanked).
+	for i, want := range []string{"44445555", "66667777", "88889999"} {
+		if got[i+2] != want {
+			t.Errorf("row%d = %q, want %q (right portion must not be blanked)", i+2, got[i+2], want)
+		}
 	}
 }
 

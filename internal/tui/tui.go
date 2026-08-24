@@ -1725,8 +1725,6 @@ func buildHelpRows(k Keymap) []helpRow {
 	}
 }
 
-
-
 // buildHelpLines returns styled rows for the help box. An action bound to
 // several keys lists them as separate rows (one key per line) so every key
 // stays scannable in its own column.
@@ -1771,7 +1769,7 @@ func renderHelpBox(lines []string, width, height int) []string {
 	}
 	style := lipgloss.NewStyle().
 		Border(lipgloss.RoundedBorder()).
-		Width(width - 2)
+		Width(width)
 	return strings.Split(style.Render(strings.Join(lines, "\n")), "\n")
 }
 
@@ -1785,14 +1783,19 @@ func overlayLines(base, top []string, x, y, width, height int) []string {
 	}
 	out := make([]string, 0, len(base))
 	for row := 0; row < height; row++ {
-		var line string
+		line := ""
 		if row < len(base) {
-			line = ansi.Truncate(base[row], x, "")
-		}
-		if pad := x - lipgloss.Width(line); pad > 0 {
-			line += strings.Repeat(" ", pad)
+			line = base[row]
 		}
 		if row >= y && row-y < len(top) {
+			// Box row: keep only the transcript to the left of the box, then
+			// draw the box row over the right portion. Rows the box does not
+			// cover keep their full transcript — the right columns must not be
+			// blanked below the box's bottom edge.
+			line = ansi.Truncate(line, x, "")
+			if pad := x - lipgloss.Width(line); pad > 0 {
+				line += strings.Repeat(" ", pad)
+			}
 			line += ansi.Truncate(top[row-y], max(0, width-x), "")
 		}
 		if w := lipgloss.Width(line); w < width {
