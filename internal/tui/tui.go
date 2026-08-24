@@ -234,20 +234,49 @@ func (m *model) syncInputHeight() {
 	m.inputH = h
 	m.input.SetHeight(h)
 
-	// Ensure the viewport scroll position stays optimal:
-	// When height expands, textarea's viewport offset may remain scrolled down
-	// even though all lines fit, hiding earlier lines (like line 0 and '>').
-	lines := m.input.LineCount()
-	if m.input.ScrollYOffset() > 0 {
-		if lines <= h || lines-m.input.ScrollYOffset() < h {
-			savedLine := m.input.Line()
-			savedCol := m.input.Column()
-			m.input.MoveToBegin()
+	// Keep the cursor visible: after a multiline paste the textarea's
+	// internal viewport can stay scrolled to the top even though the cursor
+	// sits on the last pasted line (the last line then renders off-screen).
+	// Re-anchor by moving to the end and letting repositionView align the
+	// viewport around the cursor.
+	m.clampInputCursor()
+}
+
+// clampInputCursor re-anchors the textarea viewport so the cursor row is
+// always inside the rendered view. It preserves the cursor position exactly
+// (row and column) — only the scroll offset changes.
+func (m *model) clampInputCursor() {
+	in := &m.input
+	lines := in.LineCount()
+	h := m.inputH
+	if h < 1 {
+		h = 1
+	}
+	// All lines fit: pin the view to the top so line 0 and the prompt show.
+	if lines <= h {
+		if in.ScrollYOffset() != 0 {
+			savedLine, savedCol := in.Line(), in.Column()
+			in.MoveToBegin()
 			for i := 0; i < savedLine; i++ {
-				m.input.CursorDown()
+				in.CursorDown()
 			}
-			m.input.SetCursorColumn(savedCol)
+			in.SetCursorColumn(savedCol)
 		}
+		return
+	}
+	// Content overflows the box: make sure the cursor row is within
+	// [YOffset, YOffset+h-1]; if not, scroll minimally via MoveToEnd-style
+	// re-anchor. Moving to end guarantees the last line is reachable and the
+	// viewport follows the cursor, which is what typing/pasting expects.
+	// NOTE: the textarea's viewport content is only (re)populated inside
+	// View()/Update(); until then maxYOffset() is stale, so a View() call is
+	// required first or ScrollDown becomes a no-op and the last pasted lines
+	// render off-screen.
+	row := in.Line()
+	off := in.ScrollYOffset()
+	if row < off || row >= off+h {
+		_ = in.View()
+		in.MoveToEnd()
 	}
 }
 
