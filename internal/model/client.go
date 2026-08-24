@@ -64,11 +64,11 @@ func (m Message) MarshalJSON() ([]byte, error) {
 // a multimodal array is not expected in responses and is ignored.
 func (m *Message) UnmarshalJSON(data []byte) error {
 	var aux struct {
-		Role             string     `json:"role"`
+		Role             string          `json:"role"`
 		Content          json.RawMessage `json:"content"`
-		ReasoningContent string     `json:"reasoning_content"`
-		ToolCalls        []ToolCall `json:"tool_calls"`
-		ToolCallID       string     `json:"tool_call_id"`
+		ReasoningContent string          `json:"reasoning_content"`
+		ToolCalls        []ToolCall      `json:"tool_calls"`
+		ToolCallID       string          `json:"tool_call_id"`
 	}
 	if err := json.Unmarshal(data, &aux); err != nil {
 		return err
