@@ -184,6 +184,21 @@ func (s *Store) summarize(id string, de os.DirEntry) (Summary, error) {
 		if e.Role == "tool" {
 			sum.ToolCalls++
 		}
+		// Unit boundary entries keep the revision delta only inside their
+		// compact JSON Content; surface it for the summary without
+		// duplicating it in Entry fields at write time.
+		if e.Role == "unit" {
+			var b struct {
+				BaseRevision   string `json:"base_revision,omitempty"`
+				ResultRevision string `json:"result_revision,omitempty"`
+			}
+			if json.Unmarshal([]byte(e.Content), &b) == nil {
+				if sum.BaseRevision == "" {
+					sum.BaseRevision = b.BaseRevision
+				}
+				sum.ResultRevision = b.ResultRevision
+			}
+		}
 		sum.ToolCalls += len(e.Tools)
 		if e.BaseRevision != "" && sum.BaseRevision == "" {
 			sum.BaseRevision = e.BaseRevision

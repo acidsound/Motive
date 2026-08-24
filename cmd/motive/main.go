@@ -106,13 +106,13 @@ func main() {
 			if unitID == "" {
 				return
 			}
+			// The compact JSON line in Content is the single source of truth
+			// (status, revision delta, budget usage); no duplicated Entry
+			// fields are written alongside it.
 			_ = sess.Append(unitID, session.Entry{
-				TS:             time.Now(),
-				Role:           "unit",
-				Content:        rec.String(),
-				BaseRevision:   rec.BaseRevision,
-				ResultRevision: rec.ResultRevision,
-				ElapsedMS:      rec.ElapsedMS,
+				TS:      time.Now(),
+				Role:    "unit",
+				Content: rec.String(),
 			})
 		}
 	}
