@@ -1676,20 +1676,17 @@ func buildHelpRows(k Keymap) []helpRow {
 		{[]string{string(k.Stop)}, "Stop"},
 		{[]string{string(k.Newline), "alt+enter"}, "Insert newline"},
 		{[]string{string(k.CycleEffort)}, "Cycle effort"},
-		{[]string{string(k.SessionPicker)}, "Session picker"},
+		{[]string{string(k.SessionPicker)}, "Sessions"},
 		{[]string{string(k.DiffToggle)}, "Git diff"},
-		{[]string{string(k.UnitsPanel)}, "Unit executions"},
+		{[]string{string(k.UnitsPanel)}, "Unit runs"},
 		{[]string{string(k.ToolsToggle)}, "Toggle tools"},
 		{[]string{string(k.AttachFile)}, "Attach file"},
 		{[]string{string(k.PasteImage)}, "Paste image"},
-		{[]string{string(k.Help), "alt+h"}, "Toggle help (this)"},
-		{[]string{string(k.ScrollUp)}, "Scroll up"},
-		{[]string{string(k.ScrollDown)}, "Scroll down"},
-		{[]string{string(k.PageUp)}, "Page up"},
-		{[]string{string(k.PageDown)}, "Page down"},
-		{[]string{string(k.HistoryUp)}, "History up"},
-		{[]string{string(k.HistoryDown)}, "History down"},
-		{[]string{string(k.Bookmark)}, "Bookmark message"},
+		{[]string{string(k.Help), "alt+h"}, "Toggle help"},
+		{[]string{string(k.ScrollUp), "/", string(k.ScrollDown)}, "Scroll up/down"},
+		{[]string{string(k.PageUp), "/", string(k.PageDown)}, "Page up/down"},
+		{[]string{string(k.HistoryUp), "/", string(k.HistoryDown)}, "History up/down"},
+		{[]string{string(k.Bookmark)}, "Bookmark"},
 		{[]string{string(k.Clear)}, "Clear transcript"},
 		{[]string{string(k.Quit)}, "Quit"},
 	}
@@ -1706,18 +1703,17 @@ var maxDescLen = func() int {
 	return m
 }()
 
-// buildHelpLines returns styled rows for the help box. Each row's key column
-// stacks one binding per line; the description column word-wraps within its
-// fixed width so long descriptions wrap inside their own cell instead of
-// pushing the layout wider.
+// buildHelpLines returns styled rows for the help box. Each row renders its
+// bindings joined on a single line ("k1 / k2") so the whole panel fits a
+// normal terminal height; the description column word-wraps within its fixed
+// width so long descriptions wrap inside their own cell instead of pushing
+// the layout wider.
 func buildHelpLines(k Keymap) []string {
 	rows := buildHelpRows(k)
 	keyW := 0
 	for _, r := range rows {
-		for _, key := range r.keys {
-			if len(key) > keyW {
-				keyW = len(key)
-			}
+		if w := len(strings.Join(r.keys, " / ")); w > keyW {
+			keyW = w
 		}
 	}
 	descW := maxDescLen
@@ -1726,17 +1722,12 @@ func buildHelpLines(k Keymap) []string {
 	out := []string{stylePanelHeading.Render("Keybindings")}
 	for _, r := range rows {
 		descLines := wrapCell(r.desc, descW)
-		height := max(len(r.keys), len(descLines))
-		for i := 0; i < height; i++ {
+		for i, dl := range descLines {
 			key := ""
-			if i < len(r.keys) {
-				key = r.keys[i]
+			if i == 0 {
+				key = strings.Join(r.keys, " / ")
 			}
-			desc := ""
-			if i < len(descLines) {
-				desc = descLines[i]
-			}
-			out = append(out, "  "+keyStyle.Render(key)+"  "+descStyle.Render(desc))
+			out = append(out, "  "+keyStyle.Render(key)+"  "+descStyle.Render(dl))
 		}
 	}
 	return out
