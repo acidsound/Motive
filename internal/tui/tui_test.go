@@ -7,6 +7,7 @@ import (
 
 	tea "charm.land/bubbletea/v2"
 	"github.com/acidsound/Motive/internal/config"
+	"github.com/charmbracelet/x/ansi"
 	llm "github.com/acidsound/Motive/internal/model"
 	"github.com/acidsound/Motive/internal/runtime"
 	"github.com/acidsound/Motive/internal/session"
@@ -224,11 +225,15 @@ func TestToggleHelp(t *testing.T) {
 	}
 }
 
-func TestHelpInRightColumnView(t *testing.T) {
+// TestHelpFloatingView verifies the keybindings panel is a floating overlay:
+// it is drawn over the top-right of the transcript (which stays visible
+// around it) rather than occupying a full-height side column.
+func TestHelpFloatingView(t *testing.T) {
 	m := newTestModel()
 	m.width = 80
 	m.height = 24
 	m.helpOpen = true
+	m.appendMessage(message{role: "user", content: "transcript line"})
 
 	view := m.View()
 	if !strings.Contains(view.Content, "Keybindings") {
@@ -237,8 +242,35 @@ func TestHelpInRightColumnView(t *testing.T) {
 	if !strings.Contains(view.Content, "ctrl+/") {
 		t.Errorf("expected view to contain help key ctrl+/, got:\n%s", view.Content)
 	}
+	// The transcript must remain visible beside the floating box (not hidden
+	// behind a full-height panel column).
+	if !strings.Contains(view.Content, "transcript line") {
+		t.Errorf("transcript hidden behind the help panel, got:\n%s", view.Content)
+	}
 	if !strings.Contains(m.statusLine(), "help") {
 		t.Errorf("status line should show help indicator: %s", m.statusLine())
+	}
+}
+
+// TestHelpBoxHugsContentNoBottomBlank locks in the floating-panel rule: a
+// floating box must hug its text. Even when handed far more vertical room than
+// it needs, the rendered box is exactly content+2 rows (top + bottom border)
+// and never pads blank rows below the content — otherwise it would cover the
+// transcript underneath with whitespace.
+func TestHelpBoxHugsContentNoBottomBlank(t *testing.T) {
+	lines := buildHelpLines(DefaultKeymap())
+	const bigH = 200
+	box := renderHelpBox(lines, 40, bigH)
+	if got, want := len(box), len(lines)+2; got != want {
+		t.Fatalf("box height = %d, want %d (content %d + 2 border)", got, want, len(lines))
+	}
+	// The bottom row is the closing border, and the row above it still carries
+	// a keybinding — the box does not cover its own bottom with whitespace.
+	if !strings.Contains(ansi.Strip(box[len(box)-1]), "╰") {
+		t.Errorf("box bottom row is not the closing border: %q", box[len(box)-1])
+	}
+	if s := strings.TrimSpace(ansi.Strip(box[len(box)-2])); s == "" {
+		t.Errorf("row above the box bottom border is blank (box covers its bottom with whitespace): %q", box[len(box)-2])
 	}
 }
 

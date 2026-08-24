@@ -1511,13 +1511,7 @@ func (m *model) View() tea.View {
 
 	status := m.statusLine()
 	statusH := lineCount(status)
-	panelW := 0
-	if m.helpOpen {
-		// Size the panel to its widest row so long key labels like
-		// "shift+enter / alt+enter" are not clipped by a fixed cap.
-		panelW = helpPanelWidth(width)
-	}
-	bodyW := width - panelW - 1
+	bodyW := width
 	if bodyW < 20 {
 		bodyW = 20
 	}
@@ -1537,11 +1531,28 @@ func (m *model) View() tea.View {
 	}
 	transcript := m.renderTranscript(bodyW, avail)
 
+	// The help overlay floats on top of the transcript: it is sized to its
+	// own content (not the full viewport) and drawn over the transcript's
+	// top-left corner, so the underlying lines remain visible around it.
 	var body []string
-	if panelW > 0 {
-		panelH := max(avail, len(transcript))
-		rightLines := m.renderRightColumn(panelH)
-		body = zipColumns(transcript, rightLines, bodyW, panelW)
+	if m.helpOpen {
+		helpLines := buildHelpLines(m.keys)
+		// Keep at least a few transcript rows visible below the floating
+		// box: the newest messages must stay readable while help is open.
+		const helpBottomMargin = 3
+		helpH := min(len(helpLines)+2, max(1, avail-helpBottomMargin))
+		helpW := helpPanelWidth(m.keys, width)
+		if helpW > width {
+			helpW = width
+		}
+		box := renderHelpBox(helpLines, helpW, helpH)
+		base := transcript
+		for len(base) < min(len(box), avail) {
+			// Pad the base so the floating box still has rows to draw on
+			// when the transcript itself is empty or shorter than the box.
+			base = append(base, strings.Repeat(" ", width))
+		}
+		body = overlayLines(base, box, max(0, width-helpW), 0, width, avail)
 	} else {
 		body = transcript
 	}
@@ -1636,23 +1647,42 @@ func (m model) renderRightColumn(panelH int) []string {
 	return panelWindow(lines, 0, panelH)
 }
 
-// helpPanelWidth sizes the help side panel: wide enough for the widest
-// keybinding label, capped so the transcript keeps at least 20 columns.
-func helpPanelWidth(width int) int {
-	keyW := 0
-	for _, r := range buildHelpRows(DefaultKeymap()) {
+// helpCols computes the column widths needed for the help rows so no line
+// wraps: the key column fits the widest key label, the desc column fits the
+// widest description. Both are measured from the actual rows passed in, so
+// adding or editing a row automatically adjusts the panel size without any
+// constant to keep in sync.
+func helpCols(rows []helpRow) (keyW, descW int) {
+	for _, r := range rows {
 		for _, key := range r.keys {
 			if len(key) > keyW {
 				keyW = len(key)
 			}
 		}
+		if len(r.desc) > descW {
+			descW = len(r.desc)
+		}
 	}
-	w := keyW + 2 + maxDescLen + 4 // indent + gap + desc + margin
+	return
+}
+
+// helpPanelWidth sizes the help floating panel: wide enough for the widest
+// keybinding row, capped so the transcript keeps at least 20 columns. The key
+// and desc columns are measured from the active keymap's rows (custom
+// MOTIVE_KEY_* bindings can be wider than the defaults). A 2-column content
+// margin is required because lipgloss word-wraps a line that exactly fills
+// (or nearly fills) the inner width, which would split the longest
+// descriptions across two rows.
+func helpPanelWidth(k Keymap, width int) int {
+	keyW, descW := helpCols(buildHelpRows(k))
+	// Row = 2-space indent + key column + 2-space gap + desc column.
+	contentW := 2 + keyW + 2 + descW
+	w := contentW + 2 + 2 // +2 content margin (avoid exact-fit wrap) + 2 border
 	if w < 24 {
 		w = 24
 	}
-	if w > width/2 {
-		w = width / 2
+	if w > width-2 {
+		w = width - 2
 	}
 	if w < 24 {
 		w = min(24, width)
@@ -1683,51 +1713,36 @@ func buildHelpRows(k Keymap) []helpRow {
 		{[]string{string(k.AttachFile)}, "Attach file"},
 		{[]string{string(k.PasteImage)}, "Paste image"},
 		{[]string{string(k.Help), "alt+h"}, "Toggle help"},
-		{[]string{string(k.ScrollUp), "/", string(k.ScrollDown)}, "Scroll up/down"},
-		{[]string{string(k.PageUp), "/", string(k.PageDown)}, "Page up/down"},
-		{[]string{string(k.HistoryUp), "/", string(k.HistoryDown)}, "History up/down"},
+		{[]string{string(k.ScrollUp)}, "Scroll up"},
+		{[]string{string(k.ScrollDown)}, "Scroll down"},
+		{[]string{string(k.PageUp)}, "Page up"},
+		{[]string{string(k.PageDown)}, "Page down"},
+		{[]string{string(k.HistoryUp)}, "History up"},
+		{[]string{string(k.HistoryDown)}, "History down"},
 		{[]string{string(k.Bookmark)}, "Bookmark"},
 		{[]string{string(k.Clear)}, "Clear transcript"},
 		{[]string{string(k.Quit)}, "Quit"},
 	}
 }
 
-// maxDescLen is the width of the widest description in the help rows.
-var maxDescLen = func() int {
-	m := 0
-	for _, r := range buildHelpRows(DefaultKeymap()) {
-		if len(r.desc) > m {
-			m = len(r.desc)
-		}
-	}
-	return m
-}()
 
-// buildHelpLines returns styled rows for the help box. Each row renders its
-// bindings joined on a single line ("k1 / k2") so the whole panel fits a
-// normal terminal height; the description column word-wraps within its fixed
-// width so long descriptions wrap inside their own cell instead of pushing
-// the layout wider.
+
+// buildHelpLines returns styled rows for the help box. An action bound to
+// several keys lists them as separate rows (one key per line) so every key
+// stays scannable in its own column.
 func buildHelpLines(k Keymap) []string {
 	rows := buildHelpRows(k)
-	keyW := 0
-	for _, r := range rows {
-		if w := len(strings.Join(r.keys, " / ")); w > keyW {
-			keyW = w
-		}
-	}
-	descW := maxDescLen
+	keyW, descW := helpCols(rows)
 	keyStyle := lipgloss.NewStyle().Foreground(lipgloss.Color(colorPrompt)).Width(keyW)
 	descStyle := lipgloss.NewStyle().Foreground(lipgloss.Color(colorAssistant)).Width(descW)
 	out := []string{stylePanelHeading.Render("Keybindings")}
 	for _, r := range rows {
-		descLines := wrapCell(r.desc, descW)
-		for i, dl := range descLines {
-			key := ""
+		for i, key := range r.keys {
+			desc := ""
 			if i == 0 {
-				key = strings.Join(r.keys, " / ")
+				desc = r.desc
 			}
-			out = append(out, "  "+keyStyle.Render(key)+"  "+descStyle.Render(dl))
+			out = append(out, "  "+keyStyle.Render(key)+"  "+descStyle.Render(desc))
 		}
 	}
 	return out
@@ -1740,6 +1755,52 @@ func wrapCell(s string, width int) []string {
 	}
 	wrapped := ansi.Wordwrap(s, width, "")
 	return strings.Split(wrapped, "\n")
+}
+
+// renderHelpBox draws the help lines inside a rounded-border box sized to
+// exactly the given width and its content height (capped at height). The
+// box never pads blank rows below the content: a floating panel must hug
+// its text, so extra vertical room is left for the transcript underneath.
+func renderHelpBox(lines []string, width, height int) []string {
+	inner := height - 2
+	if inner < 1 {
+		inner = 1
+	}
+	if len(lines) > inner {
+		lines = lines[:inner]
+	}
+	style := lipgloss.NewStyle().
+		Border(lipgloss.RoundedBorder()).
+		Width(width - 2)
+	return strings.Split(style.Render(strings.Join(lines, "\n")), "\n")
+}
+
+// overlayLines pastes top lines over base at (x, y), keeping ANSI styling of
+// both layers and clipping to the given width/height. Compositing is done
+// per-cell: the base line is truncated to the paste column, padded to it,
+// the overlay row appended, then the whole row clipped to width.
+func overlayLines(base, top []string, x, y, width, height int) []string {
+	if x < 0 {
+		x = 0
+	}
+	out := make([]string, 0, len(base))
+	for row := 0; row < height; row++ {
+		var line string
+		if row < len(base) {
+			line = ansi.Truncate(base[row], x, "")
+		}
+		if pad := x - lipgloss.Width(line); pad > 0 {
+			line += strings.Repeat(" ", pad)
+		}
+		if row >= y && row-y < len(top) {
+			line += ansi.Truncate(top[row-y], max(0, width-x), "")
+		}
+		if w := lipgloss.Width(line); w < width {
+			line += strings.Repeat(" ", width-w)
+		}
+		out = append(out, ansi.Truncate(line, width, ""))
+	}
+	return out
 }
 
 // panelWindow returns the visible slice of the panel content for the given
