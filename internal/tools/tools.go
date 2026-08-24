@@ -44,9 +44,10 @@ Editing files:
 Recovering from interrupted work:
 - Your current session id is included in your context block.
 - If a previous run in this session was interrupted or failed before finishing,
-  call session_log to read the latest entries of this session's transcript
-  (a .jsonl file) and see where the last run left off, then continue from there
-  rather than starting over.
+  /recovery starts a fresh evidence-backed execution. Inspect Workspace + Git
+  first, then use session_log if relevant; decide yourself whether to continue,
+  discard, re-plan, ask the user, or finish. Full observational logs and
+  persisted reasoning are not recovery context.
 
 EPIC / decomposition principles (confirmed; canonical detail in
 docs/decomposition.md):
