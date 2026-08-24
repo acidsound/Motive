@@ -13,8 +13,8 @@ import (
 type unitsPanel struct {
 	units    []unitRecord
 	scroll   int
-	cursor   int  // selected row in the list; -1 when nothing is selectable
-	detail   int  // index into units; -1 when the list is shown
+	cursor   int // selected row in the list; -1 when nothing is selectable
+	detail   int // index into units; -1 when the list is shown
 	detailLn []string
 }
 
