@@ -14,6 +14,7 @@ import (
 	"github.com/acidsound/Motive/internal/runtime"
 	"github.com/acidsound/Motive/internal/session"
 	"github.com/acidsound/Motive/internal/tui"
+	"github.com/acidsound/Motive/internal/version"
 )
 
 // newModelClient builds the production model client from resolved config.
@@ -45,9 +46,15 @@ func main() {
 	tuiMode := flag.Bool("tui", false, "start the terminal UI")
 	verbose := flag.Bool("v", false, "show execution telemetry")
 	resume := flag.Bool("r", false, "open the TUI session picker on start")
+	showVersion := flag.Bool("version", false, "print the build version and exit")
 	var attach attachFlags
 	flag.Var(&attach, "attach", "attach a file (image/video/any); relative paths resolve against the cwd, then the workspace root")
 	flag.Parse()
+
+	if *showVersion {
+		fmt.Println(version.Version)
+		return
+	}
 
 	var cfg *config.Config
 	var err error

@@ -28,6 +28,25 @@ binary itself is never committed; only the source is.
 go build -o bin/motive ./cmd/motive
 ```
 
+`motive --version` prints the build version (`dev` for local builds, the
+commit-hash tag for CI releases).
+
+## Release
+
+Binaries are **never built locally for distribution** — GitHub Actions builds
+them on every push to `main` via [GoReleaser](.goreleaser.yaml) and publishes
+a GitHub Release. The release (and the embedded version) is tagged with the
+short commit hash, so each commit to `main` maps to exactly one release:
+
+```text
+push to main
+  -> CI tags the commit with its short hash (e.g. 5382e190)
+  -> goreleaser cross-compiles linux/darwin/windows × amd64/arm64
+  -> a GitHub Release named after the hash is published (or replaced)
+```
+
+Install from the release assets, e.g. `motive_5382e190_linux_amd64.tar.gz`.
+
 ## Run
 
 ```bash
