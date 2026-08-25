@@ -31,11 +31,13 @@ jobs:
       - name: Run tests
         run: go test ./...
 
-      # Fixed tag => one rolling "latest" release that is rebuilt on every push.
+      # Fixed tag => one rolling "Latest" release rebuilt on every push.
+      # Must be valid semver for GoReleaser; the release is titled "Latest"
+      # via .goreleaser.yaml (release.name).
       - name: Tag for release
         id: tag
         run: |
-          TAG="latest"
+          TAG="v0.0.0"
           git tag -f "$TAG"
           echo "tag=$TAG" >> "$GITHUB_OUTPUT"
 
