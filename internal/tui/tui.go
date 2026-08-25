@@ -4,6 +4,8 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
+	"os"
+	"path/filepath"
 	"strings"
 	"time"
 
@@ -229,7 +231,12 @@ func (m *model) syncInputHeight() {
 	maxH := maxInputHeight
 	if m.height > 0 {
 		statusH := lineCount(m.statusLine())
-		availForInput := m.height - statusH - 2
+		// Reserve one more row for the workspace line above the status bar.
+		wsH := 0
+		if m.workspaceLine(m.width) != "" {
+			wsH = 1
+		}
+		availForInput := m.height - statusH - wsH - 2
 		if availForInput < 1 {
 			availForInput = 1
 		}
@@ -1465,6 +1472,67 @@ func truncateRunes(s string, max int) string {
 	return string(r[:max]) + "…"
 }
 
+// workspaceLine returns a dim-style line showing the current workspace root,
+// ready to render above the status bar. It returns "" when no workspace is
+// available (e.g. in tests). The home directory is abbreviated to ~ and
+// overlong paths are truncated from the left so the leaf directory stays
+// visible.
+func (m model) workspaceLine(width int) string {
+	if m.rt == nil || m.rt.WS == nil || m.rt.WS.Root == "" {
+		return ""
+	}
+	path := abbreviateHome(m.rt.WS.Root)
+	path = "📁 " + path
+	if width > 0 && lipgloss.Width(path) > width {
+		path = truncateLeft(path, width)
+	}
+	return styleDim.Render(path)
+}
+
+// abbreviateHome replaces the user's home directory prefix with ~.
+func abbreviateHome(p string) string {
+	home, err := os.UserHomeDir()
+	if err != nil || home == "" {
+		return p
+	}
+	home = filepath.Clean(home)
+	if p == home {
+		return "~"
+	}
+	if strings.HasPrefix(p, home+string(filepath.Separator)) {
+		return "~" + p[len(home):]
+	}
+	return p
+}
+
+// truncateLeft shortens s to at most max display columns keeping the tail
+// (the rightmost content), replacing the removed head with an ellipsis so
+// the most useful part (the leaf directory) stays visible.
+func truncateLeft(s string, max int) string {
+	if max < 1 {
+		return ""
+	}
+	if lipgloss.Width(s) <= max {
+		return s
+	}
+	runes := []rune(s)
+	var keep []rune
+	w := 0
+	for i := len(runes) - 1; i >= 0; i-- {
+		rw := lipgloss.Width(string(runes[i]))
+		if w+rw > max-1 {
+			break
+		}
+		keep = append(keep, runes[i])
+		w += rw
+	}
+	out := make([]rune, len(keep))
+	for i, r := range keep {
+		out[len(keep)-1-i] = r
+	}
+	return "…" + string(out)
+}
+
 // collapsedToolsSummary builds the one-line summary shown for a message's
 // tool calls while they are collapsed: completed calls plus a live tail of
 // the most recent calls, so the latest activity stays visible.
@@ -1599,6 +1667,13 @@ func (m *model) View() tea.View {
 
 	status := m.statusLine()
 	statusH := lineCount(status)
+	// The workspace root gets its own dim line directly above the status
+	// bar: it is static chrome (unlike the scrolling transcript), so the
+	// user always knows which directory the tools act on. Its height must
+	// be subtracted from the transcript's available space and added to the
+	// cursor offset, otherwise the layout overflows the terminal.
+	wsLine := m.workspaceLine(width)
+	wsH := lineCount(wsLine)
 	bodyW := width
 	if bodyW < 20 {
 		bodyW = 20
@@ -1613,7 +1688,7 @@ func (m *model) View() tea.View {
 		pre = append(pre, styleError.Render(m.notice))
 	}
 	pre = append(pre, attachmentLines(m.attachments, width)...)
-	avail := height - m.inputH - statusH - len(pre)
+	avail := height - m.inputH - statusH - wsH - len(pre)
 	if avail < 1 {
 		avail = 1
 	}
@@ -1653,6 +1728,10 @@ func (m *model) View() tea.View {
 		b.WriteString(l)
 		b.WriteString("\n")
 	}
+	if wsLine != "" {
+		b.WriteString(wsLine)
+		b.WriteString("\n")
+	}
 	b.WriteString(status)
 	b.WriteString("\n")
 	for _, l := range pre {
@@ -1664,7 +1743,7 @@ func (m *model) View() tea.View {
 	v := tea.NewView(b.String())
 	v.AltScreen = true
 	if cursor := m.input.Cursor(); cursor != nil {
-		cursor.Y += len(body) + statusH + len(pre)
+		cursor.Y += len(body) + wsH + statusH + len(pre)
 		v.Cursor = cursor
 	}
 	return v

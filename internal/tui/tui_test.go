@@ -11,6 +11,7 @@ import (
 	llm "github.com/acidsound/Motive/internal/model"
 	"github.com/acidsound/Motive/internal/runtime"
 	"github.com/acidsound/Motive/internal/session"
+	"github.com/acidsound/Motive/internal/workspace"
 	"github.com/charmbracelet/x/ansi"
 )
 
@@ -631,5 +632,107 @@ func TestFailedTurnSuggestsRecovery(t *testing.T) {
 
 	if !strings.Contains(m.notice, "/recovery") {
 		t.Fatalf("notice = %q, want /recovery suggestion", m.notice)
+	}
+}
+
+// TestWorkspaceLineHiddenWithoutWorkspace: with no runtime workspace the
+// workspace line must be empty so the layout is unchanged (e.g. in tests).
+func TestWorkspaceLineHiddenWithoutWorkspace(t *testing.T) {
+	m := newTestModel()
+	if got := m.workspaceLine(80); got != "" {
+		t.Errorf("workspaceLine without rt.WS = %q, want empty", got)
+	}
+}
+
+// TestWorkspaceLineShowsRoot: the workspace root appears on the line, with
+// the home directory abbreviated to ~ when the root lives under HOME.
+func TestWorkspaceLineShowsRoot(t *testing.T) {
+	t.Setenv("HOME", "/home/tester")
+	m := newTestModel()
+	m.rt.WS = &workspace.Workspace{Root: "/home/tester/proj"}
+
+	line := m.workspaceLine(80)
+	if !strings.Contains(line, "~/proj") {
+		t.Errorf("workspaceLine = %q, want it to contain ~/proj", line)
+	}
+	if strings.Contains(line, "/home/tester") {
+		t.Errorf("workspaceLine = %q, home directory should be abbreviated", line)
+	}
+
+	// A root outside HOME is shown in full.
+	m.rt.WS.Root = "/srv/other/workspace"
+	if line := m.workspaceLine(80); !strings.Contains(line, "/srv/other/workspace") {
+		t.Errorf("workspaceLine = %q, want full root outside home", line)
+	}
+}
+
+// TestWorkspaceLineTruncatesToWidth: an overlong path is truncated from the
+// left so the leaf directory stays visible and the line never exceeds the
+// terminal width.
+func TestWorkspaceLineTruncatesToWidth(t *testing.T) {
+	t.Setenv("HOME", "/nonexistent")
+	m := newTestModel()
+	m.rt.WS = &workspace.Workspace{Root: "/very/long/path/with/many/segments/project"}
+
+	const width = 20
+	line := m.workspaceLine(width)
+	plain := ansi.Strip(line)
+	if ansi.StringWidth(plain) > width {
+		t.Errorf("workspaceLine width = %d, want <= %d (%q)", ansi.StringWidth(plain), width, plain)
+	}
+	if !strings.HasSuffix(strings.TrimSpace(plain), "project") {
+		t.Errorf("workspaceLine should keep the leaf directory visible: %q", plain)
+	}
+	if !strings.HasPrefix(plain, "…") {
+		t.Errorf("workspaceLine should start with an ellipsis when truncated: %q", plain)
+	}
+}
+
+// TestTruncateLeftKeepsTail locks the left-truncation rule: the rightmost
+// content survives, the head is replaced by an ellipsis, and the result fits
+// max display columns.
+func TestTruncateLeftKeepsTail(t *testing.T) {
+	if got := truncateLeft("abcdefghij", 6); got != "…fghij" {
+		t.Errorf("truncateLeft = %q, want %q", got, "…fghij")
+	}
+	if got := truncateLeft("short", 80); got != "short" {
+		t.Errorf("truncateLeft short = %q, want unchanged", got)
+	}
+	if got := truncateLeft("short", 0); got != "" {
+		t.Errorf("truncateLeft max=0 = %q, want empty", got)
+	}
+}
+
+// TestWorkspaceLineRenderedAboveStatusBar: in the full view the workspace
+// line sits directly above the status bar (which shows the model name) and
+// the rendered content stays within the terminal height.
+func TestWorkspaceLineRenderedAboveStatusBar(t *testing.T) {
+	t.Setenv("HOME", "/home/tester")
+	m := newTestModel()
+	m.rt.WS = &workspace.Workspace{Root: "/home/tester/proj"}
+	m.width = 80
+	m.height = 24
+	m.appendMessage(message{role: "user", content: "hello"})
+
+	view := m.View()
+	lines := strings.Split(view.Content, "\n")
+	wsIdx := -1
+	statusIdx := -1
+	for i, l := range lines {
+		if strings.Contains(l, "~/proj") {
+			wsIdx = i
+		}
+		if strings.Contains(l, "test-model") {
+			statusIdx = i
+		}
+	}
+	if wsIdx < 0 {
+		t.Fatalf("workspace line not rendered:\n%s", view.Content)
+	}
+	if statusIdx < 0 {
+		t.Fatalf("status line not rendered:\n%s", view.Content)
+	}
+	if wsIdx != statusIdx-1 {
+		t.Errorf("workspace line at %d, status bar at %d: want workspace directly above status bar", wsIdx, statusIdx)
 	}
 }
