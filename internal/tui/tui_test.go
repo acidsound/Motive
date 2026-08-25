@@ -738,40 +738,108 @@ func TestWorkspaceLineRenderedAboveStatusBar(t *testing.T) {
 	}
 }
 
-// TestStatusLineCleanLayout locks the status-bar cleanup: the idle bar shows
-// the model/effort/revision/session but no static "budget" segment, while the
-// busy bar folds the budget into the live counters (tools n/max, elapsed/max).
+// TestStatusLineCleanLayout locks the status-bar layout: the same segments
+// are shown while reasoning and while waiting for input (step capacity,
+// tok/s, cache hit, last context, enter-mode steer/queue, revision, session)
+// — no "budget" wording, no reshuffle. Unobserved metrics show "–"
+// placeholders until the first model response.
+// TestCycleQueueModeWhileIdle verifies that ctrl+\ cycles the enter-mode even
+// while idle: the mode persists across turns, so the user may pre-select
+// steer before submitting the next request.
+func TestCycleQueueModeWhileIdle(t *testing.T) {
+	m := newTestModel()
+	if m.steerMode {
+		t.Fatal("initial mode should be queue")
+	}
+
+	m2, _ := m.handleKey(teaKey("ctrl+\\"))
+	m = *m2.(*model)
+	if !m.steerMode {
+		t.Fatal("ctrl+\\ while idle should switch to steer mode")
+	}
+	if !strings.Contains(m.statusLine(), "steer") {
+		t.Errorf("idle status line should show steer mode: %s", m.statusLine())
+	}
+
+	m2, _ = m.handleKey(teaKey("ctrl+\\"))
+	m = *m2.(*model)
+	if m.steerMode {
+		t.Fatal("second ctrl+\\ should cycle back to queue mode")
+	}
+}
+
+// TestCycleQueueModeWhileBusy verifies that ctrl+\ still cycles the mode
+// while a run is in progress.
+func TestCycleQueueModeWhileBusy(t *testing.T) {
+	m := newTestModel()
+	m.busy = true
+
+	m2, _ := m.handleKey(teaKey("ctrl+\\"))
+	m = *m2.(*model)
+	if !m.steerMode {
+		t.Fatal("ctrl+\\ while busy should switch to steer mode")
+	}
+	m2, _ = m.handleKey(teaKey("ctrl+\\"))
+	m = *m2.(*model)
+	if m.steerMode {
+		t.Fatal("second ctrl+\\ while busy should cycle back to queue mode")
+	}
+}
+
 func TestStatusLineCleanLayout(t *testing.T) {
 	m := newTestModel()
 	m.baseRev = "abcdef1234567890"
 	m.sessionID = "20260825-164451-103000"
 	m.rt.Budget = runtime.ExecutionBudget{MaxSteps: 64, MaxToolCalls: 128, MaxDuration: 30 * time.Minute}
 
-	// Idle: no static budget segment, session id abbreviated, revision shown.
+	// Idle: constant layout with placeholders; the enter-mode segment shows
+	// the persisted default (queue) and no budget wording.
 	idle := m.statusLine()
 	if strings.Contains(idle, "budget") {
-		t.Errorf("idle status line should not show static budget: %s", idle)
+		t.Errorf("status line should not show budget wording: %s", idle)
 	}
-	if !strings.Contains(idle, "abcdef1") {
-		t.Errorf("idle status line should show revision: %s", idle)
+	for _, want := range []string{"64 steps", "tok/s", "cache", "ctx", "queue", "abcdef1", "20260825-164451"} {
+		if !strings.Contains(idle, want) {
+			t.Errorf("idle status line missing %q: %s", want, idle)
+		}
+	}
+	if strings.Contains(idle, "steer") {
+		t.Errorf("idle status line should not show steer mode: %s", idle)
 	}
 	if strings.Contains(idle, "20260825-164451-103000") {
-		t.Errorf("idle status line should abbreviate the session id: %s", idle)
-	}
-	if !strings.Contains(idle, "20260825-164451") {
-		t.Errorf("idle status line should show the abbreviated session id: %s", idle)
+		t.Errorf("status line should abbreviate the session id: %s", idle)
 	}
 
-	// Busy: step/tool/elapsed counters folded against the budget maxima.
+	// Busy: the same segments stay, no reshuffle.
 	m.busy = true
-	m.step = 3
 	m.maxSteps = 64
-	m.toolCalls = 2
 	m.elapsed = 45 * time.Second
 	busy := m.statusLine()
-	for _, want := range []string{"step 3/64", "tools 2/128", "45s/30m"} {
+	for _, want := range []string{"64 steps", "tok/s", "cache", "ctx", "queue", "abcdef1", "20260825-164451"} {
 		if !strings.Contains(busy, want) {
 			t.Errorf("busy status line missing %q: %s", want, busy)
+		}
+	}
+
+	// Steer mode while busy: the mode flips to steer, and a non-empty queue
+	// adds its count (steer falls back to the queue when the channel is full).
+	m.steerMode = true
+	m.queue = []string{"q1", "q2"}
+	steer := m.statusLine()
+	for _, want := range []string{"steer", "queue 2"} {
+		if !strings.Contains(steer, want) {
+			t.Errorf("steer status line missing %q: %s", want, steer)
+		}
+	}
+
+	// After a model response: live metrics replace the placeholders.
+	m.tokPerSec = 45.2
+	m.cacheHit = 87.4
+	m.lastCtx = 12345
+	live := m.statusLine()
+	for _, want := range []string{"45.2 tok/s", "cache 87%", "ctx 12.3k"} {
+		if !strings.Contains(live, want) {
+			t.Errorf("status line missing %q: %s", want, live)
 		}
 	}
 }

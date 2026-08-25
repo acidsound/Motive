@@ -166,12 +166,17 @@ type model struct {
 	transcriptTop   int // 0-based index of the first visible line
 	transcriptAvail int // visible viewport height
 
-	step      int
 	maxSteps  int
-	toolCalls int
 	elapsed   time.Duration
 	baseRev   string
 	resultRev string
+
+	// Last observed model metrics for the status bar: tok/s and cache-hit
+	// rate from the most recent server timings, lastCtx the context size of
+	// the most recent request. cacheHit is -1 until the first observation.
+	tokPerSec float64
+	cacheHit  float64
+	lastCtx   int
 
 	overlay    overlayKind
 	list       list.Model
@@ -340,6 +345,7 @@ func newModel(rt *runtime.Runtime, cfg *config.Config, sess *session.Store, star
 		spin:        spin,
 		inputH:      1,
 		startPicker: startPicker,
+		cacheHit:    -1,
 	}
 	m.syncInputHeight()
 	return m
@@ -484,10 +490,9 @@ func (m *model) handleKey(msg tea.KeyPressMsg) (tea.Model, tea.Cmd) {
 		return m, nil
 
 	case string(m.keys.CycleQueueMode):
-		// Only meaningful while a run is in progress.
-		if m.busy {
-			m.steerMode = !m.steerMode
-		}
+		// The mode persists across turns, so it can be cycled while idle too:
+		// the user may want to pre-select steer before submitting.
+		m.steerMode = !m.steerMode
 		return m, nil
 
 	case string(m.keys.SessionPicker):
@@ -732,7 +737,6 @@ func (m *model) startTurn(request string, attachments []attachItem) (tea.Model, 
 	m.appendMessage(message{role: "user", content: request, attachments: attachments, ts: time.Now()})
 
 	m.busy = true
-	m.step = 0
 	m.stopping = false
 	m.stoppedPersisted = false
 	m.stopCancel = nil
@@ -740,7 +744,6 @@ func (m *model) startTurn(request string, attachments []attachItem) (tea.Model, 
 		m.maxSteps = m.rt.Budget.MaxSteps
 		m.rt.Stream = true
 	}
-	m.toolCalls = 0
 	m.elapsed = 0
 	m.scroll = 0
 
@@ -974,13 +977,28 @@ func (m *model) handleTrace(event runtime.TraceEvent) (tea.Model, tea.Cmd) {
 	switch event.Kind {
 	case "start":
 		m.maxSteps = event.MaxSteps
-		m.step = 0
-		m.toolCalls = 0
 		m.baseRev = event.BaseRevision
 
 	case "model_start":
-		m.step = event.Step
 		m.maxSteps = event.MaxSteps
+		if event.ContextTokens > 0 {
+			m.lastCtx = event.ContextTokens
+		}
+
+	case "model_end":
+		if event.ContextTokens > 0 {
+			m.lastCtx = event.ContextTokens
+		}
+		if t := event.ServerTimings; t != nil {
+			if t.PredictedPerSecond > 0 {
+				m.tokPerSec = t.PredictedPerSecond
+			} else if t.PredictedMS > 0 && t.PredictedN > 0 {
+				m.tokPerSec = float64(t.PredictedN) / (t.PredictedMS / 1000)
+			}
+			if t.PromptN > 0 {
+				m.cacheHit = float64(t.CacheN) / float64(t.PromptN) * 100
+			}
+		}
 
 	case "delta":
 		last := m.assistantSlot()
@@ -996,7 +1014,6 @@ func (m *model) handleTrace(event runtime.TraceEvent) (tea.Model, tea.Cmd) {
 		last.liveTool = liveToolLine(event.ToolName, event.ToolArgs)
 
 	case "tool":
-		m.toolCalls = event.TotalToolCalls
 		last := m.assistantSlot()
 		if event.ToolName == "shell" {
 			if id, ok := unitSessionID(event.ToolResultHead); ok {
@@ -1674,19 +1691,6 @@ func truncateLeft(s string, max int) string {
 	return "…" + string(out)
 }
 
-// shortDur formats a duration for the status bar, showing only minutes when
-// whole minutes, seconds otherwise, e.g. "30m" or "45s".
-func shortDur(d time.Duration) string {
-	d = d.Round(time.Second)
-	if d < 0 {
-		return "0s"
-	}
-	if d%time.Minute == 0 {
-		return fmt.Sprintf("%dm", d/time.Minute)
-	}
-	return d.String()
-}
-
 // collapsedToolsSummary builds the one-line summary shown for a message's
 // tool calls while they are collapsed: completed calls plus a live tail of
 // the most recent calls, so the latest activity stays visible.
@@ -1703,6 +1707,9 @@ func (m model) collapsedToolsSummary(tools []string) string {
 	return summary + " (" + string(m.keys.ToolsToggle) + " to expand)"
 }
 
+// statusLine renders the bottom status bar. Its layout is constant: the same
+// segments are shown while reasoning and while waiting for input, so the bar
+// never reshuffles. Segments without an observation yet show "–".
 func (m model) statusLine() string {
 	var b strings.Builder
 	if m.busy {
@@ -1714,26 +1721,34 @@ func (m model) statusLine() string {
 		b.WriteString(m.rt.Model.Model)
 		b.WriteString(" · " + styleEffort.Render("effort "+m.rt.Model.GetReasoningEffort()))
 	}
-	if m.busy {
-		// Live counters against the execution budget: step and tool-call
-		// progress plus elapsed time vs the max duration. This replaces the
-		// always-on static budget segment — the budget is only meaningful
-		// while a run is in progress, and folding it into the counters keeps
-		// the idle bar short.
-		b.WriteString(fmt.Sprintf(" · step %d/%d · tools %d/%d · %s/%s",
-			m.step, m.maxSteps,
-			m.toolCalls, m.rt.Budget.MaxToolCalls,
-			m.elapsed.Round(time.Second), shortDur(m.rt.Budget.MaxDuration)))
-		// Enter-mode while busy: steer (inject into the running execution) or
-		// queue (FIFO for the next turn), cycled with ctrl+\.
-		mode := "queue"
-		if m.steerMode {
-			mode = "steer"
-		}
-		b.WriteString(" · " + styleEffort.Render(mode))
-		if len(m.queue) > 0 {
-			b.WriteString(fmt.Sprintf(" · queue %d", len(m.queue)))
-		}
+	if steps := m.stepsCapacity(); steps > 0 {
+		b.WriteString(fmt.Sprintf(" · %d steps", steps))
+	}
+	if m.tokPerSec > 0 {
+		b.WriteString(fmt.Sprintf(" · %.1f tok/s", m.tokPerSec))
+	} else {
+		b.WriteString(" · – tok/s")
+	}
+	if m.cacheHit >= 0 {
+		b.WriteString(fmt.Sprintf(" · cache %.0f%%", m.cacheHit))
+	} else {
+		b.WriteString(" · cache –")
+	}
+	if m.lastCtx > 0 {
+		b.WriteString(" · ctx " + humanTokens(m.lastCtx))
+	} else {
+		b.WriteString(" · ctx –")
+	}
+	// Enter-mode while busy: steer (inject into the running execution) or
+	// queue (FIFO for the next turn), cycled with ctrl+\. The mode persists
+	// across turns, so it is always shown; a non-empty queue adds its count.
+	mode := "queue"
+	if m.steerMode {
+		mode = "steer"
+	}
+	b.WriteString(" · " + styleEffort.Render(mode))
+	if len(m.queue) > 0 {
+		b.WriteString(fmt.Sprintf(" · queue %d", len(m.queue)))
 	}
 	if rev := m.revisionLabel(); rev != "" {
 		b.WriteString(" · " + rev)
@@ -1751,6 +1766,30 @@ func (m model) statusLine() string {
 		b.WriteString(" · tools⏷")
 	}
 	return styleStatus.Render(b.String())
+}
+
+// stepsCapacity reports the step budget: the value observed from the active
+// or most recent execution, or the configured maximum before the first run.
+func (m model) stepsCapacity() int {
+	if m.maxSteps > 0 {
+		return m.maxSteps
+	}
+	if m.rt != nil && m.rt.Budget.MaxSteps > 0 {
+		return m.rt.Budget.MaxSteps
+	}
+	return 0
+}
+
+// humanTokens renders a token count compactly: 950, 12.3k, 1.4M.
+func humanTokens(n int) string {
+	switch {
+	case n >= 1<<20:
+		return fmt.Sprintf("%.1fM", float64(n)/(1<<20))
+	case n >= 1000:
+		return fmt.Sprintf("%.1fk", float64(n)/1000)
+	default:
+		return fmt.Sprintf("%d", n)
+	}
 }
 
 // scrollPosition reports the current viewport location within the full
