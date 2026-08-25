@@ -1533,6 +1533,19 @@ func truncateLeft(s string, max int) string {
 	return "…" + string(out)
 }
 
+// shortDur formats a duration for the status bar, showing only minutes when
+// whole minutes, seconds otherwise, e.g. "30m" or "45s".
+func shortDur(d time.Duration) string {
+	d = d.Round(time.Second)
+	if d < 0 {
+		return "0s"
+	}
+	if d%time.Minute == 0 {
+		return fmt.Sprintf("%dm", d/time.Minute)
+	}
+	return d.String()
+}
+
 // collapsedToolsSummary builds the one-line summary shown for a message's
 // tool calls while they are collapsed: completed calls plus a live tail of
 // the most recent calls, so the latest activity stays visible.
@@ -1561,7 +1574,15 @@ func (m model) statusLine() string {
 		b.WriteString(" · " + styleEffort.Render("effort "+m.rt.Model.GetReasoningEffort()))
 	}
 	if m.busy {
-		b.WriteString(fmt.Sprintf(" · step %d/%d · tools %d · %s", m.step, m.maxSteps, m.toolCalls, m.elapsed.Round(time.Second)))
+		// Live counters against the execution budget: step and tool-call
+		// progress plus elapsed time vs the max duration. This replaces the
+		// always-on static budget segment — the budget is only meaningful
+		// while a run is in progress, and folding it into the counters keeps
+		// the idle bar short.
+		b.WriteString(fmt.Sprintf(" · step %d/%d · tools %d/%d · %s/%s",
+			m.step, m.maxSteps,
+			m.toolCalls, m.rt.Budget.MaxToolCalls,
+			m.elapsed.Round(time.Second), shortDur(m.rt.Budget.MaxDuration)))
 		// Enter-mode while busy: steer (inject into the running execution) or
 		// queue (FIFO for the next turn), cycled with ctrl+\.
 		mode := "queue"
@@ -1573,14 +1594,11 @@ func (m model) statusLine() string {
 			b.WriteString(fmt.Sprintf(" · queue %d", len(m.queue)))
 		}
 	}
-	if m.rt != nil {
-		b.WriteString(fmt.Sprintf(" · budget %d steps / %d tools / %s", m.rt.Budget.MaxSteps, m.rt.Budget.MaxToolCalls, m.rt.Budget.MaxDuration.Round(time.Minute)))
-	}
 	if rev := m.revisionLabel(); rev != "" {
 		b.WriteString(" · " + rev)
 	}
 	if m.sessionID != "" {
-		b.WriteString(" · " + m.sessionID)
+		b.WriteString(" · " + shortID8(m.sessionID))
 	}
 	if len(m.attachments) > 0 {
 		b.WriteString(fmt.Sprintf(" · 📎%d", len(m.attachments)))

@@ -279,7 +279,7 @@ The TUI supports scrollback, prompt history navigation, transcript bookmarks, to
 
 Key bindings are rebindable via `MOTIVE_KEY_<NAME>` environment variables. **[SOURCE]**
 
-The TUI status area displays the active model, reasoning effort, execution step/tool/elapsed counters, execution budget, Git revision range, and session ID. **[SOURCE]**
+The TUI status area displays the active model, reasoning effort, Git revision range, and abbreviated session ID, and while executing also the step/tool/elapsed counters against the execution budget (max steps/tool calls/duration). **[SOURCE]**
 
 Reasoning effort can be changed interactively rather than being restricted to an environment-variable-only setting. **[SOURCE]**
 

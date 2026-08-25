@@ -5,6 +5,7 @@ import (
 	"strconv"
 	"strings"
 	"testing"
+	"time"
 
 	tea "charm.land/bubbletea/v2"
 	"github.com/acidsound/Motive/internal/config"
@@ -734,5 +735,43 @@ func TestWorkspaceLineRenderedAboveStatusBar(t *testing.T) {
 	}
 	if wsIdx != statusIdx-1 {
 		t.Errorf("workspace line at %d, status bar at %d: want workspace directly above status bar", wsIdx, statusIdx)
+	}
+}
+
+// TestStatusLineCleanLayout locks the status-bar cleanup: the idle bar shows
+// the model/effort/revision/session but no static "budget" segment, while the
+// busy bar folds the budget into the live counters (tools n/max, elapsed/max).
+func TestStatusLineCleanLayout(t *testing.T) {
+	m := newTestModel()
+	m.baseRev = "abcdef1234567890"
+	m.sessionID = "20260825-164451-103000"
+	m.rt.Budget = runtime.ExecutionBudget{MaxSteps: 64, MaxToolCalls: 128, MaxDuration: 30 * time.Minute}
+
+	// Idle: no static budget segment, session id abbreviated, revision shown.
+	idle := m.statusLine()
+	if strings.Contains(idle, "budget") {
+		t.Errorf("idle status line should not show static budget: %s", idle)
+	}
+	if !strings.Contains(idle, "abcdef1") {
+		t.Errorf("idle status line should show revision: %s", idle)
+	}
+	if strings.Contains(idle, "20260825-164451-103000") {
+		t.Errorf("idle status line should abbreviate the session id: %s", idle)
+	}
+	if !strings.Contains(idle, "20260825-164451") {
+		t.Errorf("idle status line should show the abbreviated session id: %s", idle)
+	}
+
+	// Busy: step/tool/elapsed counters folded against the budget maxima.
+	m.busy = true
+	m.step = 3
+	m.maxSteps = 64
+	m.toolCalls = 2
+	m.elapsed = 45 * time.Second
+	busy := m.statusLine()
+	for _, want := range []string{"step 3/64", "tools 2/128", "45s/30m"} {
+		if !strings.Contains(busy, want) {
+			t.Errorf("busy status line missing %q: %s", want, busy)
+		}
 	}
 }
