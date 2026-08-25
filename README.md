@@ -158,6 +158,13 @@ esc            stop run (busy) / close help
 ctrl+c         quit
 ```
 
+`alt+m` opens the model picker: configured providers are listed as horizontal
+tabs on top, and the active tab's models below. `←`/`→` or `h`/`l` switch the
+provider tab (wrapping), `↑`/`↓` selects a model, `enter` applies it — this
+switches the live endpoint, model, and the provider's sampling settings for
+subsequent turns. Endpoints without a working `/models` endpoint fall back to
+the provider's configured model list.
+
 macOS 터미널의 "natural text editing" 프로필이 `cmd+backspace`→`ctrl+u`,
 `cmd+←`→`ctrl+a`, `cmd+→`→`ctrl+e`를 보내기 때문에, 이 세 readline 키는
 오버레이 바인딩에 쓰지 않는다(각각 alt+u, alt+a, alt+e로 대체).

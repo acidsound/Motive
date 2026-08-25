@@ -67,11 +67,14 @@ type openPickerMsg struct {
 }
 
 // modelsMsg carries the result of an asynchronous /models fetch so the picker
-// can be opened once the endpoint responds. err is non-nil on failure.
+// can be opened once the endpoint responds. providerIdx tags which provider
+// tab the result belongs to so stale responses (the user already switched
+// tabs) are dropped. err is non-nil on failure.
 type modelsMsg struct {
-	models  []modelapi.ModelInfo
-	current string
-	err     error
+	providerIdx int
+	models      []modelapi.ModelInfo
+	current     string
+	err         error
 }
 
 type overlayKind int
@@ -174,6 +177,15 @@ type model struct {
 	list       list.Model
 	diffLines  []string
 	diffScroll int
+
+	// Model picker provider-tab state: providers is the horizontal tab row,
+	// providerIdx the active tab, modelLoading true while the active tab's
+	// model list is being fetched, modelLoadErr a fetch failure shown inside
+	// the open picker.
+	providers    []config.Provider
+	providerIdx  int
+	modelLoading bool
+	modelLoadErr string
 
 	// attach is the file-attach overlay state; attachments holds the pending
 	// attachments for the next turn.
@@ -388,7 +400,11 @@ func (m *model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		m.input.SetWidth(max(1, msg.Width))
 		m.syncInputHeight()
 		if m.overlay == overlaySessionPicker || m.overlay == overlayModelPicker {
-			m.list.SetSize(max(40, m.width-6), max(10, m.height-8))
+			h := max(10, m.height-8)
+			if m.overlay == overlayModelPicker {
+				h = m.modelPickerListH()
+			}
+			m.list.SetSize(max(40, m.width-6), h)
 		}
 		if m.overlay == overlayAttach {
 			m.attach.input.SetWidth(max(1, msg.Width-2))
@@ -576,6 +592,10 @@ func (m *model) handleOverlayKey(msg tea.KeyPressMsg) (tea.Model, tea.Cmd) {
 		return m.handleUnitsKey(key)
 	}
 	if key == "esc" || key == "ctrl+c" {
+		if m.overlay == overlayModelPicker {
+			m.modelLoading = false
+			m.modelLoadErr = ""
+		}
 		m.overlay = overlayNone
 		return m, nil
 	}
@@ -589,6 +609,14 @@ func (m *model) handleOverlayKey(msg tea.KeyPressMsg) (tea.Model, tea.Cmd) {
 		return m, cmd
 
 	case overlayModelPicker:
+		// Provider tabs: left/right arrows and h/l move the active tab (with
+		// wraparound), refetching that provider's model list.
+		switch key {
+		case "left", "h":
+			return m, m.switchProvider(-1)
+		case "right", "l":
+			return m, m.switchProvider(1)
+		}
 		if key == string(m.keys.Run) {
 			return m.applyPickerSelection()
 		}
@@ -1053,25 +1081,113 @@ func (m *model) openPicker(kind overlayKind) {
 	m.overlay = kind
 }
 
-// openModelPickerCmd fetches the active endpoint's model list asynchronously
-// and opens the model picker once the response arrives.
+// openModelPickerCmd initializes the provider tabs and fetches the active
+// provider's model list asynchronously; the picker opens once the response
+// arrives.
 func (m *model) openModelPickerCmd() tea.Cmd {
-	client := m.rt.Model
-	current := client.Model
+	m.providers = m.pickerProviders()
+	m.providerIdx = m.activeProviderIdx()
+	m.modelLoading = true
+	m.modelLoadErr = ""
+	return m.fetchProviderModels(m.providers[m.providerIdx], m.providerIdx)
+}
+
+// pickerProviders returns the provider tabs for the model picker: the
+// configured providers, or a single tab derived from the live client when no
+// config providers are available (tests, env-only setups).
+func (m *model) pickerProviders() []config.Provider {
+	if m.cfg != nil && len(m.cfg.Providers) > 0 {
+		out := make([]config.Provider, len(m.cfg.Providers))
+		copy(out, m.cfg.Providers)
+		return out
+	}
+	return []config.Provider{{
+		Name:    "default",
+		BaseURL: m.rt.Model.BaseURL,
+		Model:   m.rt.Model.Model,
+		APIKey:  m.rt.Model.APIKey,
+	}}
+}
+
+// activeProviderIdx finds the tab whose endpoint matches the live client, so
+// the picker opens on the provider that is actually in use.
+func (m *model) activeProviderIdx() int {
+	cur := strings.TrimRight(m.rt.Model.BaseURL, "/")
+	for i, p := range m.providers {
+		if strings.TrimRight(p.BaseURL, "/") == cur {
+			return i
+		}
+	}
+	return 0
+}
+
+// fetchProviderModels fetches p's model list on a throwaway client and
+// returns it as a modelsMsg tagged with the provider tab index. Endpoints
+// without a working /models endpoint fall back to the provider's configured
+// model list so the picker still works.
+func (m *model) fetchProviderModels(p config.Provider, idx int) tea.Cmd {
+	current := m.rt.Model.Model
 	return func() tea.Msg {
+		client := &modelapi.Client{
+			BaseURL: strings.TrimRight(p.BaseURL, "/"),
+			APIKey:  p.APIKey,
+			HTTP:    modelapi.NewHTTPClient(),
+		}
 		models, err := client.ListModels(context.Background())
-		return modelsMsg{models: models, current: current, err: err}
+		if err != nil || len(models) == 0 {
+			fallback := make([]modelapi.ModelInfo, 0, len(p.AllModels()))
+			for _, id := range p.AllModels() {
+				fallback = append(fallback, modelapi.ModelInfo{ID: id, Object: "model"})
+			}
+			if len(fallback) > 0 {
+				return modelsMsg{providerIdx: idx, models: fallback, current: current}
+			}
+		}
+		return modelsMsg{providerIdx: idx, models: models, current: current, err: err}
 	}
 }
 
-// openModelPicker opens the model picker with the fetched model list. On
-// fetch error it surfaces the error as a transient notice instead of opening
-// a broken picker.
+// switchProvider moves the active provider tab by delta (wrapping) and fetches
+// that provider's model list. The list is cleared while the fetch is in
+// flight so a stale provider's models are never shown under the new tab.
+func (m *model) switchProvider(delta int) tea.Cmd {
+	if len(m.providers) <= 1 {
+		return nil
+	}
+	m.providerIdx = (m.providerIdx+delta+len(m.providers)) % len(m.providers)
+	m.modelLoading = true
+	m.modelLoadErr = ""
+	m.list = list.New(nil, list.NewDefaultDelegate(), max(40, m.width-6), m.modelPickerListH())
+	return m.fetchProviderModels(m.providers[m.providerIdx], m.providerIdx)
+}
+
+// modelPickerListH sizes the model picker's list: the picker renders a title,
+// a provider tab row, an optional loading/error row, the list, and a hint row,
+// so it reserves more chrome rows than the session picker.
+func (m *model) modelPickerListH() int {
+	h := max(4, m.height-10)
+	return h
+}
+
+// openModelPicker opens (or refills) the model picker with the fetched model
+// list. Stale responses from a provider tab the user already left are
+// dropped. A fetch error before the picker is open surfaces as a transient
+// notice; while the picker is open it is shown inside the panel.
 func (m *model) openModelPicker(msg modelsMsg) (tea.Model, tea.Cmd) {
-	if msg.err != nil {
-		m.notice = "failed to load models: " + msg.err.Error()
+	if msg.providerIdx != m.providerIdx {
 		return m, nil
 	}
+	m.modelLoading = false
+	if msg.err != nil {
+		if m.overlay == overlayModelPicker {
+			m.modelLoadErr = msg.err.Error()
+			m.list = list.New(nil, list.NewDefaultDelegate(), max(40, m.width-6), m.modelPickerListH())
+		} else {
+			m.notice = "failed to load models: " + msg.err.Error()
+		}
+		return m, nil
+	}
+	m.modelLoadErr = ""
 	var items []list.Item
 	for _, info := range msg.models {
 		title := info.ID
@@ -1085,10 +1201,14 @@ func (m *model) openModelPicker(msg modelsMsg) (tea.Model, tea.Cmd) {
 		})
 	}
 	if len(items) == 0 {
-		m.notice = "no models available"
+		if m.overlay == overlayModelPicker {
+			m.modelLoadErr = "no models available"
+		} else {
+			m.notice = "no models available"
+		}
 		return m, nil
 	}
-	l := list.New(items, list.NewDefaultDelegate(), max(40, m.width-6), max(10, m.height-8))
+	l := list.New(items, list.NewDefaultDelegate(), max(40, m.width-6), m.modelPickerListH())
 	l.Title = "Select model"
 	l.SetShowTitle(false)
 	l.SetShowStatusBar(false)
@@ -1099,9 +1219,31 @@ func (m *model) openModelPicker(msg modelsMsg) (tea.Model, tea.Cmd) {
 	return m, nil
 }
 
+// applyProviderAndModel switches the live client to the active provider tab
+// and the selected model, carrying over the provider's endpoint and sampling
+// settings so the next turn runs against the chosen provider.
+func (m *model) applyProviderAndModel(modelID string) {
+	if len(m.providers) == 0 {
+		return
+	}
+	if m.providerIdx < 0 || m.providerIdx >= len(m.providers) {
+		m.providerIdx = 0
+	}
+	p := m.providers[m.providerIdx]
+	c := m.rt.Model
+	c.SetEndpoint(p.BaseURL, p.Model, p.APIKey)
+	c.Temperature = p.EffectiveTemperature()
+	c.MaxTokens = p.MaxTokens
+	c.SetReasoningEffort(p.ReasoningEffort)
+	c.SetModel(modelID)
+	m.notice = p.Name + " · " + modelID
+}
+
 func (m *model) applyPickerSelection() (tea.Model, tea.Cmd) {
 	item := m.list.SelectedItem()
 	m.overlay = overlayNone
+	m.modelLoading = false
+	m.modelLoadErr = ""
 	if item == nil {
 		return m, nil
 	}
@@ -1115,9 +1257,8 @@ func (m *model) applyPickerSelection() (tea.Model, tea.Cmd) {
 	}
 	if info, ok := entry.value.(modelapi.ModelInfo); ok {
 		if m.rt != nil && m.rt.Model != nil {
-			m.rt.Model.SetModel(info.ID)
+			m.applyProviderAndModel(info.ID)
 		}
-		m.notice = "model: " + info.ID
 	}
 	return m, nil
 }
@@ -1777,11 +1918,52 @@ func (m model) pickerView(width, height int) tea.View {
 	var b strings.Builder
 	b.WriteString(stylePanelHeading.Render(m.list.Title))
 	b.WriteString("\n")
+	if m.overlay == overlayModelPicker {
+		if tab := m.providerTabLine(width); tab != "" {
+			b.WriteString(tab)
+			b.WriteString("\n")
+		}
+		if m.modelLoading {
+			b.WriteString(styleDim.Render("  loading models…"))
+			b.WriteString("\n")
+		}
+		if m.modelLoadErr != "" {
+			b.WriteString(styleError.Render("  ✖ " + m.modelLoadErr))
+			b.WriteString("\n")
+		}
+	}
 	b.WriteString(m.list.View())
-	b.WriteString(styleDim.Render("  ↑/↓ select · enter apply · esc close"))
+	if m.overlay == overlayModelPicker {
+		b.WriteString(styleDim.Render("  ←/→ or h/l provider · ↑/↓ select · enter apply · esc close"))
+	} else {
+		b.WriteString(styleDim.Render("  ↑/↓ select · enter apply · esc close"))
+	}
 	v := tea.NewView(b.String())
 	v.AltScreen = true
 	return v
+}
+
+// providerTabLine renders the horizontal provider tab row for the model
+// picker: the active tab is highlighted in brackets, the others dimmed.
+// Long names are truncated so every tab fits on one line.
+func (m model) providerTabLine(width int) string {
+	if len(m.providers) == 0 {
+		return ""
+	}
+	per := (width - 4) / len(m.providers)
+	if per < 6 {
+		per = 6
+	}
+	var parts []string
+	for i, p := range m.providers {
+		name := truncateRunes(p.Name, per-2)
+		if i == m.providerIdx {
+			parts = append(parts, stylePrompt.Render("["+name+"]"))
+		} else {
+			parts = append(parts, styleDim.Render(" "+name+" "))
+		}
+	}
+	return strings.Join(parts, " ")
 }
 
 func (m model) attachView(width, height int) tea.View {
