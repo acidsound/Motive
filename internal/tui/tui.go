@@ -98,7 +98,6 @@ type message struct {
 	attachments []attachItem
 	units       []unitChip
 	ts          time.Time
-	bookmark    bool
 }
 
 // unitChip records a sub-execution (`motive run`) launched via the shell tool,
@@ -576,13 +575,6 @@ func (m *model) handleKey(msg tea.KeyPressMsg) (tea.Model, tea.Cmd) {
 			m.historyNext()
 			return m, nil
 		}
-
-	case string(m.keys.Bookmark):
-		if len(m.messages) > 0 {
-			last := &m.messages[len(m.messages)-1]
-			last.bookmark = !last.bookmark
-		}
-		return m, nil
 
 	case string(m.keys.Clear):
 		m.input.Reset()
@@ -1412,9 +1404,6 @@ func (m *model) renderTranscript(width, available int) []string {
 	var all []string
 	for _, msg := range m.messages {
 		lines := m.renderMessage(msg, width)
-		if msg.bookmark && len(lines) > 0 {
-			lines[0] = styleBookmark.Render("📌 ") + lines[0]
-		}
 		all = append(all, lines...)
 		all = append(all, "")
 	}
@@ -2162,7 +2151,6 @@ func buildHelpRows(k Keymap) []helpRow {
 		{[]string{string(k.PageDown)}, "Page down"},
 		{[]string{string(k.HistoryUp)}, "History up"},
 		{[]string{string(k.HistoryDown)}, "History down"},
-		{[]string{string(k.Bookmark)}, "Bookmark"},
 		{[]string{string(k.Clear)}, "Clear input"},
 		{[]string{string(k.Quit)}, "Quit"},
 	}

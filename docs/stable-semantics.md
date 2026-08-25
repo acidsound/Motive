@@ -275,7 +275,7 @@ The TUI is a first-class interface for interactive execution and has been exerci
 
 It streams model output live, renders lightweight markdown (headings, code blocks, lists, bold, inline code, blockquotes, horizontal rules), and displays reasoning separately. **[SOURCE]**
 
-The TUI supports scrollback, prompt history navigation, transcript bookmarks, tool-call collapsing, session selection/resume, and a git diff overlay. **[SOURCE]**
+The TUI supports scrollback, prompt history navigation, tool-call collapsing, session selection/resume, and a git diff overlay. **[SOURCE]**
 
 Key bindings are rebindable via `MOTIVE_KEY_<NAME>` environment variables. **[SOURCE]**
 

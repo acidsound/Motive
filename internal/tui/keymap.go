@@ -34,7 +34,6 @@ type Keymap struct {
 	PageDown        Binding
 	HistoryUp       Binding
 	HistoryDown     Binding
-	Bookmark        Binding
 	Clear           Binding
 	Help            Binding
 }
@@ -68,7 +67,6 @@ func DefaultKeymap() Keymap {
 		PageDown:        "ctrl+shift+j",
 		HistoryUp:       "up",
 		HistoryDown:     "down",
-		Bookmark:        "ctrl+g",
 		Clear:           "ctrl+l",
 		Help:            "ctrl+/",
 	}
@@ -96,7 +94,6 @@ func (k *Keymap) ApplyEnv() {
 	k.PageDown = envBinding("MOTIVE_KEY_PAGE_DOWN", k.PageDown)
 	k.HistoryUp = envBinding("MOTIVE_KEY_HISTORY_UP", k.HistoryUp)
 	k.HistoryDown = envBinding("MOTIVE_KEY_HISTORY_DOWN", k.HistoryDown)
-	k.Bookmark = envBinding("MOTIVE_KEY_BOOKMARK", k.Bookmark)
 	k.Clear = envBinding("MOTIVE_KEY_CLEAR", k.Clear)
 	k.Help = envBinding("MOTIVE_KEY_HELP", k.Help)
 }

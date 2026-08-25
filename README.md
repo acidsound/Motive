@@ -153,7 +153,7 @@ ctrl+\         cycle steer/queue (busy)  ctrl+/   toggle help
 ctrl+k / ctrl+j                         scroll up / down
 ctrl+shift+k / ctrl+shift+j             page up / down
 up / down      prompt history            alt+m    model picker
-ctrl+g         bookmark                  ctrl+l   clear input
+ctrl+l         clear input
 esc            stop run (busy) / close help
 ctrl+c         quit
 ```
