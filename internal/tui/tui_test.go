@@ -1,6 +1,7 @@
 package tui
 
 import (
+	"fmt"
 	"strconv"
 	"strings"
 	"testing"
@@ -598,5 +599,37 @@ func TestFullLogCapturesReasoningWithoutTranscriptLeak(t *testing.T) {
 		if strings.Contains(entry.Reasoning, "hidden reasoning") || strings.Contains(entry.Content, "hidden reasoning") {
 			t.Fatal("full-log reasoning leaked into model-visible transcript")
 		}
+	}
+}
+
+func TestRecoveryCommandStartsEvidenceBackedExecution(t *testing.T) {
+	m := newTestModel()
+	m.width = 80
+	m.height = 24
+	m.input.SetValue("/recovery")
+
+	m2, _ := m.submit()
+	m = *m2.(*model)
+
+	if len(m.messages) < 2 {
+		t.Fatalf("messages = %d, want user + assistant", len(m.messages))
+	}
+	if got := m.messages[len(m.messages)-2].content; got != recoveryBootstrap {
+		t.Fatalf("recovery request = %q, want recovery bootstrap", got)
+	}
+	if m.messages[len(m.messages)-2].content == recoveryRequest {
+		t.Fatal("literal /recovery leaked into model request")
+	}
+}
+
+func TestFailedTurnSuggestsRecovery(t *testing.T) {
+	m := newTestModel()
+	m.messages = []message{{role: "assistant"}}
+
+	m2, _ := m.finishTurn(doneMsg{err: fmt.Errorf("model unavailable")})
+	m = *m2.(*model)
+
+	if !strings.Contains(m.notice, "/recovery") {
+		t.Fatalf("notice = %q, want /recovery suggestion", m.notice)
 	}
 }

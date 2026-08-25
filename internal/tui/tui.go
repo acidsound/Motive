@@ -663,6 +663,10 @@ func (m *model) handleUnitsKey(key string) (tea.Model, tea.Cmd) {
 // submit starts a new execution turn from the input box, carrying any
 // pending attachments. An empty prompt is allowed when attachments exist
 // (e.g. "what is this?" is optional; a bare image alone is a valid turn).
+const recoveryRequest = `/recovery`
+
+const recoveryBootstrap = `Recover the previous incomplete execution from evidence, not from assumed chat history. Inspect the current workspace and Git state first. Then read the latest entries of this session with session_log if they are relevant. Decide yourself whether to continue the partial work, discard or revise it, re-plan, ask the user for clarification, or conclude that no recovery is needed. Do not read the full observational log or rely on persisted reasoning; Workspace + Git and the compact transcript are the recovery evidence.`
+
 func (m *model) submit() (tea.Model, tea.Cmd) {
 	request := strings.TrimSpace(m.input.Value())
 	if request == "" && len(m.attachments) == 0 {
@@ -671,6 +675,9 @@ func (m *model) submit() (tea.Model, tea.Cmd) {
 	m.input.Reset()
 	m.notice = ""
 	m.syncInputHeight()
+	if request == recoveryRequest {
+		return m.startTurn(recoveryBootstrap, nil)
+	}
 	return m.startTurn(request, m.attachments)
 }
 
@@ -796,6 +803,7 @@ func (m *model) persistStopped() {
 		return
 	}
 	m.stoppedPersisted = true
+	m.notice = "Previous execution was stopped. Use /recovery to inspect the current workspace and decide how to continue."
 	m.appendFull("execution_stopped", nil, "stopped by user", "", "")
 	m.saveAssistantEntry()
 	m.appendMessage(message{role: "stopped", content: "stopped by user", ts: time.Now()})
@@ -852,6 +860,9 @@ func (m *model) finishTurn(done doneMsg) (tea.Model, tea.Cmd) {
 				ResultRevision: m.resultRev,
 				ElapsedMS:      m.elapsed.Milliseconds(),
 			})
+		}
+		if len(m.queue) == 0 {
+			m.notice = "Previous execution did not complete. Use /recovery when model access is available."
 		}
 		// A failed turn must not silently drop queued requests: continue
 		// with the next queued turn, if any.
