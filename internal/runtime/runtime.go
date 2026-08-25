@@ -10,6 +10,7 @@ import (
 
 	"github.com/acidsound/Motive/internal/config"
 	"github.com/acidsound/Motive/internal/model"
+	"github.com/acidsound/Motive/internal/observation"
 	"github.com/acidsound/Motive/internal/tools"
 	"github.com/acidsound/Motive/internal/workspace"
 )
@@ -210,6 +211,7 @@ type Runtime struct {
 	Model            *model.Client
 	WS               *workspace.Workspace
 	Exec             *tools.Executor
+	Observ           *observation.State
 	MaxSteps         int
 	MaxContextTokens int
 	Budget           ExecutionBudget
@@ -272,6 +274,7 @@ func New(client *model.Client, cfg *config.Config) *Runtime {
 		Model:            client,
 		WS:               ws,
 		Exec:             &tools.Executor{WS: ws},
+		Observ:           observation.New(),
 		MaxSteps:         cfg.MaxSteps,
 		MaxContextTokens: cfg.MaxContextTokens,
 		Budget: ExecutionBudget{
@@ -374,6 +377,9 @@ func (r *Runtime) finish(event TraceEvent, text string, err error) (string, erro
 func (r *Runtime) Execute(ctx context.Context, request string, attachments ...model.Attachment) (string, error) {
 	if strings.TrimSpace(request) == "" {
 		return "", fmt.Errorf("request is empty")
+	}
+	if r.Observ == nil {
+		r.Observ = observation.New()
 	}
 	started := time.Now()
 	baseRevision := r.WS.GitHEAD()
@@ -493,6 +499,13 @@ func (r *Runtime) Execute(ctx context.Context, request string, attachments ...mo
 			obs.ToolCalls++
 			if strings.HasPrefix(result, "ERROR: ") {
 				obs.ToolFailures++
+				r.Observ.ObserveToolFailure()
+			}
+			if call.Function.Name == "read_file" && !strings.HasPrefix(result, "ERROR: ") {
+				r.Observ.ObserveRead(call.Function.Arguments, result, stepNumber)
+			}
+			if strings.HasPrefix(result, "ERROR: ") || call.Function.Name == "shell" {
+				r.Observ.ObserveDiagnostic(result)
 			}
 			r.emit(TraceEvent{Kind: "tool", Step: stepNumber, MaxSteps: budget.MaxSteps, ToolName: call.Function.Name, ToolArgs: call.Function.Arguments, ToolCalls: 1, TotalToolCalls: obs.ToolCalls, ToolResultBytes: len(result), ToolResultLines: countLines(result), ToolResultHead: resultHead(result), Latency: time.Since(toolStarted), TotalElapsed: time.Since(started), ReasoningEffort: effort})
 			messages = append(messages, model.Message{Role: "tool", ToolCallID: call.ID, Content: result})
@@ -511,6 +524,12 @@ func (r *Runtime) Execute(ctx context.Context, request string, attachments ...mo
 		obs.BaseRevision = baseRevision
 		obs.ResultRevision = r.WS.GitHEAD()
 
+		// Make runtime state visible to the model without requiring it to infer
+		// latency, failures, or remaining budget from tool output alone.
+		messages = append(messages, model.Message{Role: "system", Content: obs.context(stepNumber, budget, started, effort, baseRevision, r.WS.GitHEAD()) + "\n\n" + r.Observ.Context()})
+
+		// Observe the completed turn and adapt the next turn. Normal execution
+		// stays cheap; recovery after a tool failure gets one xhigh turn.
 		if toolFailed {
 			effort = "xhigh"
 		} else {
@@ -529,4 +548,35 @@ func (r *Runtime) Execute(ctx context.Context, request string, attachments ...mo
 
 	err := fmt.Errorf("execution budget exceeded: %d steps", budget.MaxSteps)
 	return r.finish(TraceEvent{Kind: "finish", Step: budget.MaxSteps, MaxSteps: budget.MaxSteps, TotalToolCalls: obs.ToolCalls, MaxToolCalls: budget.MaxToolCalls, ToolFailures: obs.ToolFailures, ContextTokens: ctxAcc.LastRequest, PeakContextTokens: ctxAcc.PeakRequest, MaxContextTokens: r.MaxContextTokens, ServerPromptN: ctxAcc.ServerPromptN, TotalElapsed: time.Since(started), ReasoningEffort: effort, BaseRevision: baseRevision, ResultRevision: r.WS.GitHEAD(), Error: err}, strings.Join(trace, "\n\n"), err)
+}
+
+func (o Observation) context(step int, budget ExecutionBudget, started time.Time, effort, baseRevision, resultRevision string) string {
+	remainingSteps := budget.MaxSteps - step
+	remainingTools := budget.MaxToolCalls - o.ToolCalls
+	if remainingSteps < 0 {
+		remainingSteps = 0
+	}
+	if remainingTools < 0 {
+		remainingTools = 0
+	}
+	return fmt.Sprintf("[motive self-observation]\nstep=%d/%d\nremaining_steps=%d\ntool_calls=%d/%d\ntool_failures=%d\nlast_tool_failed=%t\ncurrent_reasoning_effort=%s\nlast_model_latency=%s\nlast_predicted_tokens=%d\nlast_predicted_latency=%.0fms\nelapsed=%s\nremaining_time=%s\nbase_revision=%s\nresult_revision=%s",
+		step, budget.MaxSteps, remainingSteps, o.ToolCalls, budget.MaxToolCalls, o.ToolFailures, o.LastToolFailure, effort, o.LastModelLatency.Round(time.Millisecond), o.LastPredictedN, o.LastPredictedMS, time.Since(started).Round(time.Millisecond), maxDuration(0, budget.MaxDuration-time.Since(started)).Round(time.Second), shortRevision(baseRevision), shortRevision(resultRevision))
+}
+
+func maxDuration(a, b time.Duration) time.Duration {
+	if a > b {
+		return a
+	}
+	return b
+}
+
+func shortRevision(revision string) string {
+	revision = strings.TrimSpace(revision)
+	if revision == "" {
+		return "-"
+	}
+	if len(revision) > 12 {
+		return revision[:12]
+	}
+	return revision
 }
