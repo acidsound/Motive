@@ -28,7 +28,7 @@ jobs:
       - name: Tag with commit hash
         id: tag
         run: |
-          TAG="$(git rev-parse --short=8 HEAD)"
+          TAG="v0.0.0-$(git rev-parse --short=8 HEAD)"
           git tag "$TAG" || true
           echo "tag=$TAG" >> "$GITHUB_OUTPUT"
 
