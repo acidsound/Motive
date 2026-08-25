@@ -35,6 +35,18 @@ func TestDefaultKeymap(t *testing.T) {
 	if k.CycleEffort != "alt+e" {
 		t.Errorf("CycleEffort = %q, want alt+e", k.CycleEffort)
 	}
+	if k.NewSession != "alt+n" {
+		t.Errorf("NewSession = %q, want alt+n", k.NewSession)
+	}
+}
+
+func TestKeymapNewSessionEnv(t *testing.T) {
+	t.Setenv("MOTIVE_KEY_NEW_SESSION", "ctrl+shift+n")
+	k := DefaultKeymap()
+	k.ApplyEnv()
+	if k.NewSession != "ctrl+shift+n" {
+		t.Errorf("NewSession = %q, want ctrl+shift+n override", k.NewSession)
+	}
 }
 
 func TestKeymapApplyEnv(t *testing.T) {

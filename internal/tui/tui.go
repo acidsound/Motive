@@ -502,6 +502,13 @@ func (m *model) handleKey(msg tea.KeyPressMsg) (tea.Model, tea.Cmd) {
 		m.openPicker(overlaySessionPicker)
 		return m, nil
 
+	case string(m.keys.NewSession):
+		if m.busy {
+			return m, nil
+		}
+		m.newSession()
+		return m, nil
+
 	case string(m.keys.ModelPicker):
 		if m.busy || m.rt == nil || m.rt.Model == nil {
 			return m, nil
@@ -1079,12 +1086,14 @@ func (m *model) openPicker(kind overlayKind) {
 	var items []list.Item
 	switch kind {
 	case overlaySessionPicker:
-		title = "Resume session"
+		title = "Sessions"
+		var summaries []session.Summary
 		if m.sess != nil {
-			if summaries, err := m.sess.List(); err == nil {
-				items = buildSessionItems(summaries)
+			if s, err := m.sess.List(); err == nil {
+				summaries = s
 			}
 		}
+		items = buildSessionItems(summaries)
 	default:
 		return
 	}
@@ -1171,7 +1180,7 @@ func (m *model) switchProvider(delta int) tea.Cmd {
 	if len(m.providers) <= 1 {
 		return nil
 	}
-	m.providerIdx = (m.providerIdx+delta+len(m.providers)) % len(m.providers)
+	m.providerIdx = (m.providerIdx + delta + len(m.providers)) % len(m.providers)
 	m.modelLoading = true
 	m.modelLoadErr = ""
 	m.list = list.New(nil, list.NewDefaultDelegate(), max(40, m.width-6), m.modelPickerListH())
@@ -1268,6 +1277,10 @@ func (m *model) applyPickerSelection() (tea.Model, tea.Cmd) {
 	if !ok {
 		return m, nil
 	}
+	if _, ok := entry.value.(newSessionItem); ok {
+		m.newSession()
+		return m, nil
+	}
 	if sum, ok := entry.value.(session.Summary); ok {
 		m.loadSession(sum.ID)
 		return m, nil
@@ -1278,6 +1291,24 @@ func (m *model) applyPickerSelection() (tea.Model, tea.Cmd) {
 		}
 	}
 	return m, nil
+}
+
+// newSession resets the conversation to a fresh session: the transcript,
+// history, and revision state are cleared and sessionID is emptied so the
+// next turn creates a new session file.
+func (m *model) newSession() {
+	m.sessionID = ""
+	if m.rt != nil {
+		m.rt.SessionID = ""
+	}
+	m.messages = nil
+	m.history = nil
+	m.histIdx = 0
+	m.scroll = 0
+	m.baseRev = ""
+	m.resultRev = ""
+	m.queue = nil
+	m.notice = "New session started."
 }
 
 func (m *model) loadSession(id string) {
@@ -1468,6 +1499,10 @@ func (m model) renderMessage(msg message, width int) []string {
 				if msg.liveTool != "" {
 					out = append(out, styleTool.Render("⟳ "+msg.liveTool))
 				}
+				// The expanded view advertises the collapse binding, mirroring
+				// the "(ctrl+t to expand)" hint in the collapsed summary, so
+				// the toggle is discoverable from both states.
+				out = append(out, styleToolSum.Render("  ("+string(m.keys.ToolsToggle)+" to collapse)"))
 			}
 		}
 		if len(out) == 0 && m.busy {
@@ -2113,6 +2148,7 @@ func buildHelpRows(k Keymap) []helpRow {
 		{[]string{string(k.Newline), "alt+enter"}, "Insert newline"},
 		{[]string{string(k.CycleEffort)}, "Cycle effort"},
 		{[]string{string(k.SessionPicker)}, "Sessions"},
+		{[]string{string(k.NewSession)}, "New session"},
 		{[]string{string(k.ModelPicker)}, "Model"},
 		{[]string{string(k.DiffToggle)}, "Git diff"},
 		{[]string{string(k.UnitsPanel)}, "Unit runs"},

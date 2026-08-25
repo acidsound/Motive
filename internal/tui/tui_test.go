@@ -164,6 +164,63 @@ func TestToolsCollapsedRendering(t *testing.T) {
 	}
 }
 
+// TestToolsToggleHintBothStates verifies the toggle is discoverable from both
+// directions: the expanded view advertises the collapse binding and the
+// collapsed summary advertises the expand binding.
+func TestToolsToggleHintBothStates(t *testing.T) {
+	m := newTestModel()
+	msg := message{
+		role:  "assistant",
+		tools: []string{"shell · 12B · 5ms", "read_file · 30B · 2ms"},
+	}
+
+	// Expanded (default): the collapse hint is shown.
+	m.toolsCollapsed = false
+	joined := strings.Join(m.renderMessage(msg, 60), "\n")
+	if !strings.Contains(joined, "ctrl+t to collapse") {
+		t.Errorf("expanded: missing collapse hint:\n%s", joined)
+	}
+
+	// Collapsed: the expand hint replaces it.
+	m.toolsCollapsed = true
+	joined = strings.Join(m.renderMessage(msg, 60), "\n")
+	if !strings.Contains(joined, "ctrl+t to expand") {
+		t.Errorf("collapsed: missing expand hint:\n%s", joined)
+	}
+	if strings.Contains(joined, "ctrl+t to collapse") {
+		t.Errorf("collapsed: should not show the collapse hint:\n%s", joined)
+	}
+}
+
+// TestCtrlTCollapsesExpandedTools verifies the full key path: with tool calls
+// currently rendered expanded, ctrl+t collapses them and the view switches to
+// the summary with the expand hint.
+func TestCtrlTCollapsesExpandedTools(t *testing.T) {
+	m := newTestModel()
+	m.width = 60
+	m.height = 20
+	m.appendMessage(message{
+		role:  "assistant",
+		tools: []string{"shell · 12B · 5ms", "read_file · 30B · 2ms"},
+	})
+
+	if m.toolsCollapsed {
+		t.Fatal("initial state should be expanded")
+	}
+	if !strings.Contains(m.View().Content, "ctrl+t to collapse") {
+		t.Fatalf("expanded view missing collapse hint:\n%s", m.View().Content)
+	}
+
+	m2, _ := m.handleKey(teaKey("ctrl+t"))
+	m = *m2.(*model)
+	if !m.toolsCollapsed {
+		t.Fatal("ctrl+t while expanded should collapse the tools")
+	}
+	if view := m.View().Content; !strings.Contains(view, "ctrl+t to expand") {
+		t.Errorf("collapsed view missing expand hint:\n%s", view)
+	}
+}
+
 func TestExpandedToolArgsPreview(t *testing.T) {
 	m := newTestModel()
 	m.toolsCollapsed = false
@@ -841,5 +898,128 @@ func TestStatusLineCleanLayout(t *testing.T) {
 		if !strings.Contains(live, want) {
 			t.Errorf("status line missing %q: %s", want, live)
 		}
+	}
+}
+
+// TestBuildSessionItemsPinsNewSessionFirst locks the session-picker contract:
+// the "New session" entry is always the first row, even with no stored
+// sessions, so a fresh session is reachable from the picker at all times.
+func TestBuildSessionItemsPinsNewSessionFirst(t *testing.T) {
+	items := buildSessionItems([]session.Summary{{ID: "abc", Preview: "p"}})
+	if len(items) != 2 {
+		t.Fatalf("items = %d, want 2", len(items))
+	}
+	first, ok := items[0].(pickerItem)
+	if !ok {
+		t.Fatalf("item 0 = %T, want pickerItem", items[0])
+	}
+	if _, ok := first.value.(newSessionItem); !ok {
+		t.Fatalf("item 0 value = %T, want newSessionItem", first.value)
+	}
+	if !strings.Contains(first.title, "New session") {
+		t.Errorf("item 0 title = %q, want New session", first.title)
+	}
+
+	// No stored sessions: the New session entry is still present.
+	empty := buildSessionItems(nil)
+	if len(empty) != 1 {
+		t.Fatalf("items without sessions = %d, want 1", len(empty))
+	}
+	if _, ok := empty[0].(pickerItem); !ok {
+		t.Fatalf("empty item 0 = %T, want pickerItem", empty[0])
+	}
+}
+
+// TestApplyPickerSelectionNewSession verifies the full picker flow: opening
+// the session picker and selecting the pinned "New session" row resets the
+// conversation to a fresh session and closes the overlay.
+func TestApplyPickerSelectionNewSession(t *testing.T) {
+	dir := t.TempDir()
+	s, err := session.NewStore(dir)
+	if err != nil {
+		t.Fatal(err)
+	}
+	id, err := s.New()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := s.Append(id, session.Entry{Role: "user", Content: "old", BaseRevision: "abcdef123456"}); err != nil {
+		t.Fatal(err)
+	}
+
+	m := newTestModel()
+	m.sess = s
+	m.sessionID = id
+	m.rt.SessionID = id
+	m.messages = []message{{role: "user", content: "old"}}
+	m.history = []string{"old"}
+	m.baseRev = "abcdef123456"
+	m.resultRev = "fedcba654321"
+	m.queue = []string{"q"}
+	m.width = 80
+	m.height = 24
+
+	m.openPicker(overlaySessionPicker)
+	if m.overlay != overlaySessionPicker {
+		t.Fatal("session picker did not open")
+	}
+	// The cursor starts on the pinned "New session" row.
+	m2, _ := m.applyPickerSelection()
+	m = *m2.(*model)
+
+	if m.overlay != overlayNone {
+		t.Fatal("picker should close after selection")
+	}
+	if m.sessionID != "" {
+		t.Errorf("sessionID = %q, want empty", m.sessionID)
+	}
+	if m.rt.SessionID != "" {
+		t.Errorf("rt.SessionID = %q, want empty", m.rt.SessionID)
+	}
+	if len(m.messages) != 0 {
+		t.Errorf("messages = %d, want 0", len(m.messages))
+	}
+	if len(m.history) != 0 {
+		t.Errorf("history = %d, want 0", len(m.history))
+	}
+	if m.baseRev != "" || m.resultRev != "" {
+		t.Errorf("revisions not cleared: %q %q", m.baseRev, m.resultRev)
+	}
+	if len(m.queue) != 0 {
+		t.Errorf("queue = %d, want 0", len(m.queue))
+	}
+}
+
+// TestNewSessionKeybinding verifies the direct alt+n shortcut: it resets the
+// conversation while idle and is a no-op while a run is in progress.
+func TestNewSessionKeybinding(t *testing.T) {
+	m := newTestModel()
+	m.sessionID = "abc"
+	m.rt.SessionID = "abc"
+	m.messages = []message{{role: "user", content: "x"}}
+
+	m2, _ := m.handleKey(teaKey("alt+n"))
+	m = *m2.(*model)
+	if m.sessionID != "" {
+		t.Errorf("sessionID = %q, want empty", m.sessionID)
+	}
+	if m.rt.SessionID != "" {
+		t.Errorf("rt.SessionID = %q, want empty", m.rt.SessionID)
+	}
+	if len(m.messages) != 0 {
+		t.Errorf("messages = %d, want 0", len(m.messages))
+	}
+	if !strings.Contains(m.notice, "New session") {
+		t.Errorf("notice = %q, want New session confirmation", m.notice)
+	}
+
+	// While busy the key must be ignored: the active session is preserved.
+	m.busy = true
+	m.sessionID = "def"
+	m.rt.SessionID = "def"
+	m2, _ = m.handleKey(teaKey("alt+n"))
+	m = *m2.(*model)
+	if m.sessionID != "def" {
+		t.Errorf("sessionID = %q, want def (key ignored while busy)", m.sessionID)
 	}
 }

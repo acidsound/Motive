@@ -20,9 +20,20 @@ func (i pickerItem) Title() string       { return i.title }
 func (i pickerItem) Description() string { return i.desc }
 func (i pickerItem) FilterValue() string { return i.title + " " + i.desc }
 
-// buildSessionItems maps session summaries to picker entries.
+// newSessionItem is the sentinel value of the "New session" entry pinned at
+// the top of the session picker: selecting it starts a fresh session.
+type newSessionItem struct{}
+
+// buildSessionItems maps session summaries to picker entries. A "New session"
+// entry is always pinned at the top so a fresh session can be started from
+// the picker even when no sessions are stored yet.
 func buildSessionItems(summaries []session.Summary) []list.Item {
-	items := make([]list.Item, 0, len(summaries))
+	items := make([]list.Item, 0, len(summaries)+1)
+	items = append(items, pickerItem{
+		title: "＋ New session",
+		desc:  "start a fresh session",
+		value: newSessionItem{},
+	})
 	for _, s := range summaries {
 		rev := shortRev(s.ResultRevision)
 		if rev == "" {
