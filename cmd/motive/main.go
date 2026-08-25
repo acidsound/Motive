@@ -49,7 +49,13 @@ func main() {
 	flag.Var(&attach, "attach", "attach a file (image/video/any); relative paths resolve against the cwd, then the workspace root")
 	flag.Parse()
 
-	cfg, err := config.Load()
+	var cfg *config.Config
+	var err error
+	if config.NeedsInteractiveSetup() {
+		cfg, err = config.InteractiveSetup()
+	} else {
+		cfg, err = config.Load()
+	}
 	if err != nil {
 		fmt.Fprintf(os.Stderr, "config: %v\n", err)
 		os.Exit(1)
