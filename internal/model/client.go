@@ -258,6 +258,14 @@ func (c *Client) SetReasoningEffort(effort string) {
 	c.ReasoningEffort = normalizeEffort(effort)
 }
 
+// SetModel switches the active model id.
+func (c *Client) SetModel(model string) {
+	model = strings.TrimSpace(model)
+	if model != "" {
+		c.Model = model
+	}
+}
+
 // SetEndpoint switches the active endpoint. Empty fields keep their current
 // value so callers can change just one of base URL, model, or API key.
 func (c *Client) SetEndpoint(baseURL, model, apiKey string) {
@@ -274,6 +282,81 @@ func (c *Client) SetEndpoint(baseURL, model, apiKey string) {
 
 func (c *Client) GetReasoningEffort() string {
 	return c.ReasoningEffort
+}
+
+// ModelInfo is one entry from an OpenAI-compatible /models endpoint.
+type ModelInfo struct {
+	ID      string `json:"id"`
+	Object  string `json:"object"`
+	Created int64  `json:"created"`
+	OwnedBy string `json:"owned_by"`
+}
+
+// ListModels fetches the models served by the active endpoint (/models). Most
+// OpenAI-compatible servers return a data array of {id,...} objects, but a few
+// (e.g. some llama.cpp builds) return a bare array of id strings; both shapes
+// are decoded here. On error the returned slice is nil and the error is
+// non-nil. The Ids helper returns only the model identifiers in order.
+func (c *Client) ListModels(ctx context.Context) ([]ModelInfo, error) {
+	req, err := http.NewRequestWithContext(ctx, http.MethodGet, c.BaseURL+"/models", nil)
+	if err != nil {
+		return nil, fmt.Errorf("create models request: %w", err)
+	}
+	if c.APIKey != "" {
+		req.Header.Set("Authorization", "Bearer "+c.APIKey)
+	}
+	resp, err := c.HTTP.Do(req)
+	if err != nil {
+		return nil, fmt.Errorf("models request: %w", err)
+	}
+	defer resp.Body.Close()
+	data, err := io.ReadAll(io.LimitReader(resp.Body, 8<<20))
+	if err != nil {
+		return nil, fmt.Errorf("read models response: %w", err)
+	}
+	if resp.StatusCode < 200 || resp.StatusCode >= 300 {
+		return nil, fmt.Errorf("models returned %s: %s", resp.Status, strings.TrimSpace(string(data)))
+	}
+
+	// Shape 1: {"object":"list","data":[{"id":...},...]}
+	var list struct {
+		Data []ModelInfo `json:"data"`
+	}
+	if err := json.Unmarshal(data, &list); err == nil {
+		out := make([]ModelInfo, 0, len(list.Data))
+		for _, m := range list.Data {
+			if strings.TrimSpace(m.ID) != "" {
+				out = append(out, m)
+			}
+		}
+		if len(out) > 0 {
+			return out, nil
+		}
+	}
+
+	// Shape 2: a bare array of id strings.
+	var ids []string
+	if err := json.Unmarshal(data, &ids); err == nil {
+		out := make([]ModelInfo, 0, len(ids))
+		for _, id := range ids {
+			id = strings.TrimSpace(id)
+			if id != "" {
+				out = append(out, ModelInfo{ID: id, Object: "model"})
+			}
+		}
+		return out, nil
+	}
+
+	return nil, fmt.Errorf("decode models response: unexpected shape")
+}
+
+// ModelIds returns the model identifiers in order.
+func ModelIds(ms []ModelInfo) []string {
+	out := make([]string, 0, len(ms))
+	for _, m := range ms {
+		out = append(out, m.ID)
+	}
+	return out
 }
 
 func env(key, fallback string) string {

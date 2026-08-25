@@ -186,6 +186,71 @@ func TestChatWithEffortDefaultsRole(t *testing.T) {
 	}
 }
 
+func TestListModelsDataShape(t *testing.T) {
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.URL.Path != "/models" {
+			t.Errorf("path = %q, want /models", r.URL.Path)
+		}
+		fmt.Fprint(w, `{"object":"list","data":[
+			{"id":"gpt-4o","object":"model","owned_by":"openai"},
+			{"id":"gpt-4o-mini","object":"model","owned_by":"openai"}
+		]}`)
+	}))
+	defer srv.Close()
+
+	client := &Client{BaseURL: srv.URL, HTTP: http.DefaultClient}
+	models, err := client.ListModels(context.Background())
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got := ModelIds(models); len(got) != 2 || got[0] != "gpt-4o" || got[1] != "gpt-4o-mini" {
+		t.Fatalf("ids = %v, want [gpt-4o gpt-4o-mini]", got)
+	}
+	if models[0].OwnedBy != "openai" {
+		t.Errorf("owned_by = %q, want openai", models[0].OwnedBy)
+	}
+}
+
+func TestListModelsBareIDArrayShape(t *testing.T) {
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		fmt.Fprint(w, `["llama3","mistral"]`)
+	}))
+	defer srv.Close()
+
+	client := &Client{BaseURL: srv.URL, HTTP: http.DefaultClient}
+	models, err := client.ListModels(context.Background())
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got := ModelIds(models); len(got) != 2 || got[0] != "llama3" || got[1] != "mistral" {
+		t.Fatalf("ids = %v, want [llama3 mistral]", got)
+	}
+}
+
+func TestListModelsHTTPError(t *testing.T) {
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		http.Error(w, `{"error":"boom"}`, http.StatusInternalServerError)
+	}))
+	defer srv.Close()
+
+	client := &Client{BaseURL: srv.URL, HTTP: http.DefaultClient}
+	if _, err := client.ListModels(context.Background()); err == nil {
+		t.Fatal("expected error, got nil")
+	}
+}
+
+func TestSetModel(t *testing.T) {
+	c := &Client{Model: "old"}
+	c.SetModel("  new-model  ")
+	if c.Model != "new-model" {
+		t.Errorf("Model = %q, want new-model", c.Model)
+	}
+	c.SetModel("   ")
+	if c.Model != "new-model" {
+		t.Errorf("Model = %q after blank, want unchanged new-model", c.Model)
+	}
+}
+
 func TestChatStreamPropagatesHTTPError(t *testing.T) {
 	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		http.Error(w, `{"error":"model not found"}`, http.StatusNotFound)

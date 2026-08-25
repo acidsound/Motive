@@ -18,6 +18,7 @@ type Keymap struct {
 	Run             Binding
 	Newline         Binding
 	CycleEffort     Binding
+	ModelPicker     Binding
 	CycleQueueMode  Binding
 	SessionPicker   Binding
 	DiffToggle      Binding
@@ -50,6 +51,7 @@ func DefaultKeymap() Keymap {
 		// actions use alt+<letter> instead (requires Option-as-Meta;
 		// rebindable via MOTIVE_KEY_<NAME>).
 		CycleEffort:     "alt+e",
+		ModelPicker:     "alt+m",
 		CycleQueueMode:  "ctrl+\\",
 		SessionPicker:   "ctrl+r",
 		DiffToggle:      "ctrl+d",

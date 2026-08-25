@@ -13,6 +13,7 @@ import (
 	tea "charm.land/bubbletea/v2"
 	"charm.land/lipgloss/v2"
 	"github.com/acidsound/Motive/internal/config"
+	modelapi "github.com/acidsound/Motive/internal/model"
 	"github.com/acidsound/Motive/internal/runtime"
 	"github.com/acidsound/Motive/internal/session"
 	"github.com/charmbracelet/x/ansi"
@@ -63,11 +64,20 @@ type openPickerMsg struct {
 	kind overlayKind
 }
 
+// modelsMsg carries the result of an asynchronous /models fetch so the picker
+// can be opened once the endpoint responds. err is non-nil on failure.
+type modelsMsg struct {
+	models  []modelapi.ModelInfo
+	current string
+	err     error
+}
+
 type overlayKind int
 
 const (
 	overlayNone overlayKind = iota
 	overlaySessionPicker
+	overlayModelPicker
 	overlayDiff
 	overlayAttach
 	overlayUnits
@@ -354,6 +364,9 @@ func (m *model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		m.openPicker(msg.kind)
 		return m, nil
 
+	case modelsMsg:
+		return m.openModelPicker(msg)
+
 	case clipImageMsg:
 		return m.handleClipImage(msg)
 
@@ -367,7 +380,7 @@ func (m *model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		m.height = msg.Height
 		m.input.SetWidth(max(1, msg.Width))
 		m.syncInputHeight()
-		if m.overlay == overlaySessionPicker {
+		if m.overlay == overlaySessionPicker || m.overlay == overlayModelPicker {
 			m.list.SetSize(max(40, m.width-6), max(10, m.height-8))
 		}
 		if m.overlay == overlayAttach {
@@ -382,7 +395,7 @@ func (m *model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 	if m.overlay == overlayAttach {
 		return m.updateAttach(msg)
 	}
-	if m.overlay == overlaySessionPicker {
+	if m.overlay == overlaySessionPicker || m.overlay == overlayModelPicker {
 		var cmd tea.Cmd
 		m.list, cmd = m.list.Update(msg)
 		return m, cmd
@@ -461,6 +474,12 @@ func (m *model) handleKey(msg tea.KeyPressMsg) (tea.Model, tea.Cmd) {
 		m.openPicker(overlaySessionPicker)
 		return m, nil
 
+	case string(m.keys.ModelPicker):
+		if m.busy || m.rt == nil || m.rt.Model == nil {
+			return m, nil
+		}
+		return m, m.openModelPickerCmd()
+
 	case string(m.keys.DiffToggle):
 		m.openDiff()
 		return m, nil
@@ -531,11 +550,8 @@ func (m *model) handleKey(msg tea.KeyPressMsg) (tea.Model, tea.Cmd) {
 		return m, nil
 
 	case string(m.keys.Clear):
-		if m.busy {
-			return m, nil
-		}
-		m.messages = nil
-		m.scroll = 0
+		m.input.Reset()
+		m.syncInputHeight()
 		return m, nil
 	}
 
@@ -558,6 +574,14 @@ func (m *model) handleOverlayKey(msg tea.KeyPressMsg) (tea.Model, tea.Cmd) {
 	}
 	switch m.overlay {
 	case overlaySessionPicker:
+		if key == string(m.keys.Run) {
+			return m.applyPickerSelection()
+		}
+		var cmd tea.Cmd
+		m.list, cmd = m.list.Update(msg)
+		return m, cmd
+
+	case overlayModelPicker:
 		if key == string(m.keys.Run) {
 			return m.applyPickerSelection()
 		}
@@ -1011,6 +1035,52 @@ func (m *model) openPicker(kind overlayKind) {
 	m.overlay = kind
 }
 
+// openModelPickerCmd fetches the active endpoint's model list asynchronously
+// and opens the model picker once the response arrives.
+func (m *model) openModelPickerCmd() tea.Cmd {
+	client := m.rt.Model
+	current := client.Model
+	return func() tea.Msg {
+		models, err := client.ListModels(context.Background())
+		return modelsMsg{models: models, current: current, err: err}
+	}
+}
+
+// openModelPicker opens the model picker with the fetched model list. On
+// fetch error it surfaces the error as a transient notice instead of opening
+// a broken picker.
+func (m *model) openModelPicker(msg modelsMsg) (tea.Model, tea.Cmd) {
+	if msg.err != nil {
+		m.notice = "failed to load models: " + msg.err.Error()
+		return m, nil
+	}
+	var items []list.Item
+	for _, info := range msg.models {
+		title := info.ID
+		if info.ID == msg.current {
+			title += "  (current)"
+		}
+		items = append(items, pickerItem{
+			title: title,
+			desc:  info.OwnedBy,
+			value: info,
+		})
+	}
+	if len(items) == 0 {
+		m.notice = "no models available"
+		return m, nil
+	}
+	l := list.New(items, list.NewDefaultDelegate(), max(40, m.width-6), max(10, m.height-8))
+	l.Title = "Select model"
+	l.SetShowTitle(false)
+	l.SetShowStatusBar(false)
+	l.SetShowPagination(true)
+	l.SetFilteringEnabled(false)
+	m.list = l
+	m.overlay = overlayModelPicker
+	return m, nil
+}
+
 func (m *model) applyPickerSelection() (tea.Model, tea.Cmd) {
 	item := m.list.SelectedItem()
 	m.overlay = overlayNone
@@ -1023,6 +1093,13 @@ func (m *model) applyPickerSelection() (tea.Model, tea.Cmd) {
 	}
 	if sum, ok := entry.value.(session.Summary); ok {
 		m.loadSession(sum.ID)
+		return m, nil
+	}
+	if info, ok := entry.value.(modelapi.ModelInfo); ok {
+		if m.rt != nil && m.rt.Model != nil {
+			m.rt.Model.SetModel(info.ID)
+		}
+		m.notice = "model: " + info.ID
 	}
 	return m, nil
 }
@@ -1502,7 +1579,7 @@ func (m *model) View() tea.View {
 	if m.overlay == overlayUnits {
 		return m.unitsView(width, height)
 	}
-	if m.overlay == overlaySessionPicker {
+	if m.overlay == overlaySessionPicker || m.overlay == overlayModelPicker {
 		return m.pickerView(width, height)
 	}
 	if m.overlay == overlayAttach {
@@ -1707,6 +1784,7 @@ func buildHelpRows(k Keymap) []helpRow {
 		{[]string{string(k.Newline), "alt+enter"}, "Insert newline"},
 		{[]string{string(k.CycleEffort)}, "Cycle effort"},
 		{[]string{string(k.SessionPicker)}, "Sessions"},
+		{[]string{string(k.ModelPicker)}, "Model"},
 		{[]string{string(k.DiffToggle)}, "Git diff"},
 		{[]string{string(k.UnitsPanel)}, "Unit runs"},
 		{[]string{string(k.ToolsToggle)}, "Toggle tools"},
@@ -1720,7 +1798,7 @@ func buildHelpRows(k Keymap) []helpRow {
 		{[]string{string(k.HistoryUp)}, "History up"},
 		{[]string{string(k.HistoryDown)}, "History down"},
 		{[]string{string(k.Bookmark)}, "Bookmark"},
-		{[]string{string(k.Clear)}, "Clear transcript"},
+		{[]string{string(k.Clear)}, "Clear input"},
 		{[]string{string(k.Quit)}, "Quit"},
 	}
 }
