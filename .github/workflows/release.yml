@@ -7,6 +7,12 @@ on:
 permissions:
   contents: write
 
+# Serialize release runs so two goreleaser invocations can never overlap on
+# the same tag (which is what produced duplicate-named assets before).
+concurrency:
+  group: release-${{ github.ref }}
+  cancel-in-progress: false
+
 jobs:
   release:
     runs-on: ubuntu-latest
@@ -25,12 +31,20 @@ jobs:
       - name: Run tests
         run: go test ./...
 
-      - name: Tag with commit hash
+      # Fixed tag => one rolling "latest" release that is rebuilt on every push.
+      - name: Tag for release
         id: tag
         run: |
-          TAG="v0.0.0-$(git rev-parse --short=8 HEAD)"
-          git tag "$TAG" || true
+          TAG="latest"
+          git tag -f "$TAG"
           echo "tag=$TAG" >> "$GITHUB_OUTPUT"
+
+      # Start from a clean slate: drop any prior release (and all its assets)
+      # so goreleaser always creates a fresh one instead of stacking assets.
+      - name: Delete existing release
+        run: gh release delete "${{ steps.tag.outputs.tag }}" --yes 2>/dev/null || true
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
 
       - name: Run GoReleaser
         uses: goreleaser/goreleaser-action@v6
