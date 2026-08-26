@@ -23,7 +23,6 @@ type Keymap struct {
 	SessionPicker   Binding
 	NewSession      Binding
 	DiffToggle      Binding
-	UnitsPanel      Binding
 	ToolsToggle     Binding
 	ReasoningToggle Binding
 	AttachFile      Binding
@@ -44,19 +43,12 @@ func DefaultKeymap() Keymap {
 		Stop:    "esc",
 		Run:     "enter",
 		Newline: "shift+enter",
-		// Readline-collision policy: never bind plain ctrl+<letter> keys that
-		// macOS terminal "natural text editing" profiles send for cmd+backspace
-		// (ctrl+u), cmd+left (ctrl+a), and cmd+right (ctrl+e) — hijacking
-		// those breaks line editing and fires overlays accidentally. Such
-		// actions use alt+<letter> instead (requires Option-as-Meta;
-		// rebindable via MOTIVE_KEY_<NAME>).
 		CycleEffort:     "alt+e",
 		ModelPicker:     "alt+m",
 		CycleQueueMode:  "ctrl+\\",
 		SessionPicker:   "ctrl+r",
 		NewSession:      "alt+n",
 		DiffToggle:      "ctrl+d",
-		UnitsPanel:      "alt+u",
 		ToolsToggle:     "ctrl+t",
 		ReasoningToggle: "ctrl+o",
 		AttachFile:      "alt+a",
@@ -79,11 +71,11 @@ func (k *Keymap) ApplyEnv() {
 	k.Run = envBinding("MOTIVE_KEY_RUN", k.Run)
 	k.Newline = envBinding("MOTIVE_KEY_NEWLINE", k.Newline)
 	k.CycleEffort = envBinding("MOTIVE_KEY_CYCLE_EFFORT", k.CycleEffort)
+	k.ModelPicker = envBinding("MOTIVE_KEY_MODEL_PICKER", k.ModelPicker)
 	k.CycleQueueMode = envBinding("MOTIVE_KEY_CYCLE_QUEUE_MODE", k.CycleQueueMode)
 	k.SessionPicker = envBinding("MOTIVE_KEY_SESSION_PICKER", k.SessionPicker)
 	k.NewSession = envBinding("MOTIVE_KEY_NEW_SESSION", k.NewSession)
 	k.DiffToggle = envBinding("MOTIVE_KEY_DIFF_TOGGLE", k.DiffToggle)
-	k.UnitsPanel = envBinding("MOTIVE_KEY_UNITS_PANEL", k.UnitsPanel)
 	k.ToolsToggle = envBinding("MOTIVE_KEY_TOOLS_TOGGLE", k.ToolsToggle)
 	k.ReasoningToggle = envBinding("MOTIVE_KEY_REASONING_TOGGLE", k.ReasoningToggle)
 	k.AttachFile = envBinding("MOTIVE_KEY_ATTACH_FILE", k.AttachFile)
