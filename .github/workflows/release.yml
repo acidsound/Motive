@@ -82,7 +82,7 @@ jobs:
         run: tar -czf "motive_${GITHUB_REF_NAME}_darwin_universal.tar.gz" motive
 
       - name: Generate checksums
-        run: sha256 -a 256 motive_*.tar.gz motive_*.zip > checksums.txt
+        run: shasum -a 256 motive_*.tar.gz motive_*.zip > checksums.txt
 
       - name: Create GitHub Release
         env:
