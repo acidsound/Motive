@@ -33,6 +33,7 @@ builds:
     ldflags:
       - -s -w -X github.com/acidsound/Motive/internal/version.Version={{.Version}}
 
+# Combine macOS amd64 + arm64 into one Universal Binary.
 universal_binaries:
   - id: motive-universal
     ids:
@@ -41,28 +42,14 @@ universal_binaries:
     name_template: "motive_{{ .Version }}_darwin_universal"
 
 archives:
-  - id: motive-platforms
-    ids:
-      - motive
+  - id: motive
     formats:
       - tar.gz
-    name_template: "{{ .ProjectName }}_{{ .Version }}_{{ .Os }}_{{ .Arch }}"
+    name_template: "{{ .ProjectName }}_{{ .Version }}_{{ .Os }}_{{ if eq .Os \"darwin\" }}universal{{ else }}{{ .Arch }}{{ end }}"
     format_overrides:
       - goos: windows
         formats:
           - zip
-
-  - id: motive-macos
-    ids:
-      - motive-darwin
-      - motive-universal
-    formats:
-      - tar.gz
-    name_template: "{{ .ProjectName }}_{{ .Version }}_darwin_universal"
-    format_overrides:
-      - goos: darwin
-        formats:
-          - tar.gz
 
 checksum:
   name_template: "checksums.txt"
