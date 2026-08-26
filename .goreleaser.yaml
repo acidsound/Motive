@@ -12,9 +12,11 @@ builds:
       - linux
       - darwin
       - windows
+    # Publish exactly one artifact per platform.
+    # arm64 builds are intentionally omitted so the release has only
+    # linux, darwin (macOS), and windows artifacts.
     goarch:
       - amd64
-      - arm64
     flags:
       - -trimpath
     ldflags:
