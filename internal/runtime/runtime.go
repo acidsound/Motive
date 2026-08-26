@@ -72,34 +72,6 @@ type ExecutionBudget struct {
 	MaxToolCalls int
 }
 
-// UnitBoundary is the mechanical, runtime-written record of one bounded
-// execution (a unit): status, revision delta, and budget usage. It carries
-// only facts the runtime can observe — task-level judgment (exit criteria,
-// coherence with the plan) stays with the model. On failure, Text holds the
-// best-effort partial assistant text, so forward intent survives the boundary.
-type UnitBoundary struct {
-	Status         string `json:"status"` // completed | budget-exceeded | error
-	Steps          int    `json:"steps"`
-	MaxSteps       int    `json:"max_steps"`
-	ToolCalls      int    `json:"tool_calls"`
-	MaxToolCalls   int    `json:"max_tool_calls"`
-	ToolFailures   int    `json:"tool_failures"`
-	BaseRevision   string `json:"base_revision,omitempty"`
-	ResultRevision string `json:"result_revision,omitempty"`
-	ElapsedMS      int64  `json:"elapsed_ms,omitempty"`
-	Text           string `json:"text,omitempty"` // final response, or partial text on failure
-	Error          string `json:"error,omitempty"`
-}
-
-// String renders the record as one compact JSON line for a boundary entry.
-func (u UnitBoundary) String() string {
-	b, err := json.Marshal(u)
-	if err != nil {
-		return fmt.Sprintf(`{"status":%q}`, u.Status)
-	}
-	return string(b)
-}
-
 type Observation struct {
 	Step              int
 	MaxSteps          int
@@ -226,11 +198,6 @@ type Runtime struct {
 	// a failure look at what happened last and continue instead of restarting.
 	// When nil, the session_log tool reports that no log is available.
 	SessionLog func(sessionID string, lines int) (string, error)
-	// UnitBoundary is called once per execution with the mechanical boundary
-	// record (status, revision delta, budget usage). The one-shot CLI wires it
-	// so every unit run is persisted as durable telemetry; nil disables it
-	// (TUI runs persist a full transcript already).
-	UnitBoundary func(UnitBoundary)
 	// Steer receives user messages that are injected into a running execution
 	// at the next step boundary (after tool results, or instead of finishing).
 	// Set by the TUI; nil disables steering (one-shot CLI runs).
@@ -332,44 +299,19 @@ func (r *Runtime) emit(event TraceEvent) {
 	}
 }
 
-// finish terminates an execution: it emits the finish trace event and, when a
-// UnitBoundary sink is wired, records the mechanical boundary facts. text is
+// finish terminates an execution: it emits the finish trace event and returns
 // the final assistant text on success or the best-effort partial text on
-// failure. Every termination path (clean, budget, model error, cancel) must
-// return through this helper so no boundary is ever skipped.
+// failure, so forward intent (what the execution did and was about to do next)
+// survives. Every termination path (clean, budget, model error, cancel) must
+// return through this helper.
 func (r *Runtime) finish(event TraceEvent, text string, err error) (string, error) {
 	r.emit(event)
-	if r.UnitBoundary != nil {
-		status := "completed"
-		if err != nil {
-			status = "error"
-			if strings.Contains(err.Error(), "budget exceeded") {
-				status = "budget-exceeded"
-			}
-		}
-		rec := UnitBoundary{
-			Status:         status,
-			Steps:          event.Step,
-			MaxSteps:       event.MaxSteps,
-			ToolCalls:      event.TotalToolCalls,
-			MaxToolCalls:   event.MaxToolCalls,
-			ToolFailures:   event.ToolFailures,
-			BaseRevision:   event.BaseRevision,
-			ResultRevision: event.ResultRevision,
-			ElapsedMS:      event.TotalElapsed.Milliseconds(),
-			Text:           text,
-		}
-		if err != nil {
-			rec.Error = err.Error()
-		}
-		r.UnitBoundary(rec)
-	}
 	return text, err
 }
 
 // Execute runs a fresh execution and returns the final assistant text. On any
 // error path the returned text is best-effort partial content: the assistant
-// messages emitted before termination, so forward intent (what the unit did and
+// messages emitted before termination, so forward intent (what the execution did and
 // what it was about to do) survives budget caps and model failures. If the run
 // dies before emitting anything, no in-memory state is carried across calls;
 // the caller can re-run and the model recovers by reading the session transcript

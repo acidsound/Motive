@@ -26,9 +26,6 @@ func TestDefaultKeymap(t *testing.T) {
 	}
 	// Readline-collision policy: cmd+backspace (ctrl+u), cmd+left (ctrl+a)
 	// and cmd+right (ctrl+e) must not be shadowed by overlay bindings.
-	if k.UnitsPanel != "alt+u" {
-		t.Errorf("UnitsPanel = %q, want alt+u", k.UnitsPanel)
-	}
 	if k.AttachFile != "alt+a" {
 		t.Errorf("AttachFile = %q, want alt+a", k.AttachFile)
 	}

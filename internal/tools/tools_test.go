@@ -233,22 +233,22 @@ func TestSessionLogToolRespectsLines(t *testing.T) {
 }
 
 func TestSessionLogToolExplicitID(t *testing.T) {
-	// A parent execution can read a sub-execution's transcript (unit boundary
-	// record) by passing its session id explicitly.
+	// An execution can read another session's transcript by passing its id
+	// explicitly.
 	e := newExecutor(t)
 	e.SessionID = "parent-session"
 	e.SessionLog = func(id string, lines int) (string, error) {
-		if id != "unit-session-0002" {
-			t.Errorf("session log id = %q, want unit-session-0002", id)
+		if id != "other-session-0002" {
+			t.Errorf("session log id = %q, want other-session-0002", id)
 		}
-		return "unit boundary", nil
+		return "transcript", nil
 	}
-	out, err := e.Run(context.Background(), "session_log", `{"session_id":"unit-session-0002"}`)
+	out, err := e.Run(context.Background(), "session_log", `{"session_id":"other-session-0002"}`)
 	if err != nil {
 		t.Fatalf("session_log with explicit id: %v", err)
 	}
-	if out != "unit boundary" {
-		t.Errorf("session_log = %q, want unit boundary", out)
+	if out != "transcript" {
+		t.Errorf("session_log = %q, want transcript", out)
 	}
 }
 

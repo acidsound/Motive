@@ -18,17 +18,14 @@ import (
 )
 
 // Entry is one persisted transcript line: a user request, an assistant reply,
-// a tool line, an error, a user stop, or a unit boundary record.
+// a tool line, an error, or a user stop.
 //
-// "stopped" and "unit" are Motive transcript roles, not chat API roles: they
-// must never be sent to a model as message roles. The transcript is
-// model-visible only through the session_log tool, which renders entries as
-// plain text. A "unit" entry is the runtime-written mechanical boundary record
-// (status, revision delta, budget usage) of a one-shot execution; its Content
-// is one compact JSON line.
+// "stopped" is a Motive transcript role, not a chat API role: it must never be
+// sent to a model as a message role. The transcript is model-visible only
+// through the session_log tool, which renders entries as plain text.
 type Entry struct {
 	TS             time.Time          `json:"ts"`
-	Role           string             `json:"role"` // user | assistant | error | tool | stopped | unit
+	Role           string             `json:"role"` // user | assistant | error | tool | stopped
 	Content        string             `json:"content,omitempty"`
 	Reasoning      string             `json:"reasoning,omitempty"`
 	Tools          []string           `json:"tools,omitempty"`
@@ -184,21 +181,6 @@ func (s *Store) summarize(id string, de os.DirEntry) (Summary, error) {
 		if e.Role == "tool" {
 			sum.ToolCalls++
 		}
-		// Unit boundary entries keep the revision delta only inside their
-		// compact JSON Content; surface it for the summary without
-		// duplicating it in Entry fields at write time.
-		if e.Role == "unit" {
-			var b struct {
-				BaseRevision   string `json:"base_revision,omitempty"`
-				ResultRevision string `json:"result_revision,omitempty"`
-			}
-			if json.Unmarshal([]byte(e.Content), &b) == nil {
-				if sum.BaseRevision == "" {
-					sum.BaseRevision = b.BaseRevision
-				}
-				sum.ResultRevision = b.ResultRevision
-			}
-		}
 		sum.ToolCalls += len(e.Tools)
 		if e.BaseRevision != "" && sum.BaseRevision == "" {
 			sum.BaseRevision = e.BaseRevision
@@ -260,14 +242,9 @@ func (s *Store) Load(id string) ([]Entry, error) {
 }
 
 // FormatEntry renders a single transcript entry as a compact, model-visible
-// line. Content is truncated so a tail of many entries stays small; unit
-// boundary records keep a much larger limit so their JSON is machine-readable.
+// line. Content is truncated so a tail of many entries stays small.
 func FormatEntry(e Entry) string {
-	limit := 80
-	if e.Role == "unit" {
-		limit = 4000
-	}
-	content := firstLine(e.Content, limit)
+	content := firstLine(e.Content, 80)
 	if e.Role == "assistant" && len(e.Tools) > 0 {
 		tools := strings.Join(e.Tools, ", ")
 		if content == "" {

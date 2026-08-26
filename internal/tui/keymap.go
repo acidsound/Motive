@@ -18,7 +18,6 @@ type Keymap struct {
 	SessionPicker   Binding
 	NewSession      Binding
 	DiffToggle      Binding
-	UnitsPanel      Binding
 	ToolsToggle     Binding
 	ReasoningToggle Binding
 	AttachFile      Binding
@@ -45,7 +44,6 @@ func DefaultKeymap() Keymap {
 		SessionPicker:   "ctrl+r",
 		NewSession:      "alt+n",
 		DiffToggle:      "ctrl+d",
-		UnitsPanel:      "alt+u",
 		ToolsToggle:     "ctrl+t",
 		ReasoningToggle: "ctrl+o",
 		AttachFile:      "alt+a",
@@ -72,7 +70,6 @@ func (k *Keymap) ApplyEnv() {
 	k.SessionPicker = envBinding("MOTIVE_KEY_SESSION_PICKER", k.SessionPicker)
 	k.NewSession = envBinding("MOTIVE_KEY_NEW_SESSION", k.NewSession)
 	k.DiffToggle = envBinding("MOTIVE_KEY_DIFF_TOGGLE", k.DiffToggle)
-	k.UnitsPanel = envBinding("MOTIVE_KEY_UNITS_PANEL", k.UnitsPanel)
 	k.ToolsToggle = envBinding("MOTIVE_KEY_TOOLS_TOGGLE", k.ToolsToggle)
 	k.ReasoningToggle = envBinding("MOTIVE_KEY_REASONING_TOGGLE", k.ReasoningToggle)
 	k.AttachFile = envBinding("MOTIVE_KEY_ATTACH_FILE", k.AttachFile)

@@ -85,7 +85,6 @@ const (
 	overlayModelPicker
 	overlayDiff
 	overlayAttach
-	overlayUnits
 )
 
 type message struct {
@@ -96,29 +95,7 @@ type message struct {
 	toolArgs    []string
 	liveTool    string
 	attachments []attachItem
-	units       []unitChip
 	ts          time.Time
-}
-
-// unitChip records a sub-execution (`motive run`) launched via the shell tool,
-// detected from the in-band `[motive] unit session: <id>` stderr marker.
-type unitChip struct {
-	id   string
-	head string
-}
-
-// unitSessionID extracts a unit session id from a tool result head.
-func unitSessionID(head string) (string, bool) {
-	const marker = "[motive] unit session: "
-	for _, l := range strings.Split(head, "\n") {
-		if i := strings.Index(l, marker); i >= 0 {
-			id := strings.TrimSpace(l[i+len(marker):])
-			if id != "" && !strings.ContainsAny(id, " \t/") {
-				return id, true
-			}
-		}
-	}
-	return "", false
 }
 
 // busyPhase identifies what the runtime is doing while busy, so the busy
@@ -206,8 +183,6 @@ type model struct {
 	height int
 	inputH int
 	scroll int
-
-	units unitsPanel
 
 	// Scroll position of the transcript viewport, refreshed on each render so
 	// the input area can report where in the full transcript the user is
@@ -576,10 +551,6 @@ func (m *model) handleKey(msg tea.KeyPressMsg) (tea.Model, tea.Cmd) {
 		m.openDiff()
 		return m, nil
 
-	case string(m.keys.UnitsPanel):
-		m.openUnits()
-		return m, nil
-
 	case string(m.keys.ToolsToggle):
 		m.toggleTools()
 		return m, nil
@@ -648,11 +619,6 @@ func (m *model) handleKey(msg tea.KeyPressMsg) (tea.Model, tea.Cmd) {
 
 func (m *model) handleOverlayKey(msg tea.KeyPressMsg) (tea.Model, tea.Cmd) {
 	key := msg.String()
-	// The units detail view consumes esc itself (back to the list) before the
-	// generic overlay-close path can see it.
-	if m.overlay == overlayUnits && m.units.detail >= 0 {
-		return m.handleUnitsKey(key)
-	}
 	if key == "esc" || key == "ctrl+c" {
 		if m.overlay == overlayModelPicker {
 			m.modelLoading = false
@@ -698,61 +664,6 @@ func (m *model) handleOverlayKey(msg tea.KeyPressMsg) (tea.Model, tea.Cmd) {
 			m.diffScroll += m.height / 2
 		}
 		return m, nil
-
-	case overlayUnits:
-		return m.handleUnitsKey(key)
-	}
-	return m, nil
-}
-
-// handleUnitsKey handles keys while the units overlay is open. The list is a
-// cursor-driven picker (조회 → 선택 → 상세): up/down move the selection, enter
-// opens the selected unit's transcript, esc backs out one level at a time.
-func (m *model) handleUnitsKey(key string) (tea.Model, tea.Cmd) {
-	half := m.height / 2
-	if m.units.detail >= 0 {
-		switch key {
-		case string(m.keys.ScrollUp), "up":
-			m.units.scroll = max(0, m.units.scroll-1)
-		case string(m.keys.ScrollDown), "down":
-			m.units.scroll++
-		case string(m.keys.PageUp):
-			m.units.scroll = max(0, m.units.scroll-half)
-		case string(m.keys.PageDown):
-			m.units.scroll += half
-		case "esc", string(m.keys.Stop), string(m.keys.UnitsPanel):
-			// Back out to the list, preserving the cursor position.
-			m.units.detail = -1
-			m.units.scroll = 0
-		}
-		return m, nil
-	}
-	switch key {
-	case string(m.keys.ScrollUp), "up", "k":
-		if len(m.units.units) > 0 {
-			m.units.cursor--
-			m.units.clampCursor()
-		}
-	case string(m.keys.ScrollDown), "down", "j":
-		if len(m.units.units) > 0 {
-			m.units.cursor++
-			m.units.clampCursor()
-		}
-	case string(m.keys.PageUp):
-		m.units.cursor -= half
-		m.units.clampCursor()
-	case string(m.keys.PageDown):
-		m.units.cursor += half
-		m.units.clampCursor()
-	case "enter":
-		if m.units.cursor >= 0 && m.units.cursor < len(m.units.units) {
-			rec := m.units.units[m.units.cursor]
-			if entries, err := m.sess.Load(rec.SessionID); err == nil {
-				m.units.detailLn = strings.Split(formatUnitDetail(entries), "\n")
-				m.units.detail = m.units.cursor
-				m.units.scroll = 0
-			}
-		}
 	}
 	return m, nil
 }
@@ -1097,17 +1008,6 @@ func (m *model) handleTrace(event runtime.TraceEvent) (tea.Model, tea.Cmd) {
 
 	case "tool":
 		last := m.assistantSlot()
-		if event.ToolName == "shell" {
-			if id, ok := unitSessionID(event.ToolResultHead); ok {
-				// A one-shot `motive run` sub-execution: render as a unit
-				// chip instead of a plain shell line (option A).
-				last.units = append(last.units, unitChip{id: id, head: event.ToolResultHead})
-				last.tools = append(last.tools, "unit "+id)
-				last.toolArgs = append(last.toolArgs, toolArgsPreview(event.ToolName, event.ToolArgs))
-				last.liveTool = ""
-				return m, nil
-			}
-		}
 		last.tools = append(last.tools, toolSummary(event.ToolName, event.ToolArgs, event.ToolResultBytes, event.ToolResultLines, event.ToolResultHead))
 		last.toolArgs = append(last.toolArgs, toolArgsPreview(event.ToolName, event.ToolArgs))
 		last.liveTool = ""
@@ -1473,14 +1373,6 @@ func (m *model) openDiff() {
 	m.overlay = overlayDiff
 }
 
-// openUnits refreshes and opens the units overlay, listing every recorded
-// unit boundary so the user can inspect sub-execution outcomes.
-func (m *model) openUnits() {
-	m.units.reset()
-	m.units.units = m.loadUnits()
-	m.overlay = overlayUnits
-}
-
 // busyLine renders the busy line while the runtime is working. Instead of a
 // generic "working…" it labels the phase, so a long wait is never ambiguous:
 //   - prefill: waiting for the first bytes of the model response (the server
@@ -1584,9 +1476,6 @@ func (m model) renderMessage(msg message, width int) []string {
 		}
 		if c := strings.TrimSpace(msg.content); c != "" {
 			out = append(out, renderMarkdown(c, width)...)
-		}
-		for _, u := range msg.units {
-			out = append(out, styleBookmark.Render("⏵ unit "+u.id))
 		}
 		if len(msg.tools) > 0 || msg.liveTool != "" {
 			if m.toolsCollapsed {
@@ -2001,9 +1890,6 @@ func (m *model) View() tea.View {
 	if m.overlay == overlayDiff {
 		return m.diffView(width, height)
 	}
-	if m.overlay == overlayUnits {
-		return m.unitsView(width, height)
-	}
 	if m.overlay == overlaySessionPicker || m.overlay == overlayModelPicker {
 		return m.pickerView(width, height)
 	}
@@ -2092,12 +1978,6 @@ func (m *model) View() tea.View {
 		cursor.Y += len(body) + wsH + statusH + len(pre)
 		v.Cursor = cursor
 	}
-	return v
-}
-
-func (m model) unitsView(width, height int) tea.View {
-	v := tea.NewView(m.units.view(width, height))
-	v.AltScreen = true
 	return v
 }
 
@@ -2264,7 +2144,6 @@ func buildHelpRows(k Keymap) []helpRow {
 		{[]string{string(k.NewSession)}, "New session"},
 		{[]string{string(k.ModelPicker)}, "Model"},
 		{[]string{string(k.DiffToggle)}, "Git diff"},
-		{[]string{string(k.UnitsPanel)}, "Unit runs"},
 		{[]string{string(k.ToolsToggle)}, "Toggle tools"},
 		{[]string{string(k.AttachFile)}, "Attach file"},
 		{[]string{string(k.PasteImage)}, "Paste image"},

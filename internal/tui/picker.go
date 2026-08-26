@@ -81,6 +81,14 @@ func shortRev(rev string) string {
 	return rev
 }
 
+// shortID8 shortens a session id for compact display in the status line.
+func shortID8(id string) string {
+	if len(id) > 15 {
+		return id[:15]
+	}
+	return id
+}
+
 var (
 	styleDim          = lipgloss.NewStyle().Faint(true)
 	styleDiffHeader   = lipgloss.NewStyle().Bold(true).Foreground(lipgloss.Color(colorPrompt))
