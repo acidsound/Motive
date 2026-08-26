@@ -1,16 +1,15 @@
 name: Release
 
 on:
-  push:
-    branches: [main]
+  workflow_dispatch:
 
 permissions:
   contents: write
 
 # Serialize release runs so two goreleaser invocations can never overlap on
-# the same tag (which is what produced duplicate-named assets before).
+# the same tag.
 concurrency:
-  group: release-${{ github.ref }}
+  group: release
   cancel-in-progress: false
 
 jobs:
@@ -31,7 +30,7 @@ jobs:
       - name: Run tests
         run: go test ./...
 
-      # Fixed tag => one rolling "Latest" release rebuilt on every push.
+      # Fixed tag => one rolling "Latest" release rebuilt on demand.
       # Must be valid semver for GoReleaser; the release is titled "Latest"
       # via .goreleaser.yaml (release.name).
       - name: Tag for release
@@ -39,6 +38,7 @@ jobs:
         run: |
           TAG="v0.0.0"
           git tag -f "$TAG"
+          git push origin "$TAG" --force
           echo "tag=$TAG" >> "$GITHUB_OUTPUT"
 
       # Start from a clean slate: drop any prior release (and all its assets)
