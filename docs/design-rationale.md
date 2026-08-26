@@ -165,16 +165,9 @@ Workspace + Git provide:
 ### 6.1 The problem: compaction is not a root solution
 
 Context trimming or compaction only **raises the ceiling of a single execution**.
+A task that exceeds one context window does not fit in a single context, no matter how well compressed.
 
-```
-Track A (context lifecycle):  extend the lifetime of one context
-Track B (decomposition):      split into multiple independent executions
-```
-
-Motive chose **Track B**.
-An EPIC task does not fit in a single context, no matter how well compressed.
-
-**[SOURCE: docs/decomposition.md §2]**
+Motive's approach: **each execution starts fresh**. If a task is too large for one execution, the model (or the user) splits it into multiple independent executions that coordinate through the workspace and Git state.
 
 ### 6.2 Concrete problems with compaction
 
@@ -191,25 +184,13 @@ An EPIC task does not fit in a single context, no matter how well compressed.
    Deciding which messages to keep/remove and how to summarize requires
    model-level judgment — which conflicts with the principle that "the model judges."
 
-### 6.3 The alternative: fresh context per unit
-
-Large tasks are split into **multiple fresh contexts**. Each unit has:
-
-- its own execution budget
-- its own timeout
-- its own Git revision range
-- its own session
-
-Coordination between units happens through the workspace + Git delta.
-This is the core of `docs/decomposition.md`.
-
-### 6.4 Fresh re-judgment beats stale summaries
+### 6.3 Fresh re-judgment beats stale summaries
 
 Compaction summarizes past context, so the current model sees a "summarized past."
-The fresh-context approach re-judges **freshly** from the unit's `brief.md` + Git diff.
+The fresh-context approach re-judges **freshly** from the workspace state and Git diff.
 
 > **A summary carries the summarizer's bias.
-> Fresh re-judgment reads the original evidence (brief + diff) directly.**
+> Fresh re-judgment reads the original evidence (workspace + diff) directly.**
 
 ---
 
@@ -286,24 +267,6 @@ The user can intervene while a run is in progress:
 This is a safety boundary, not a model reasoning budget.
 **[SOURCE: config.go, runtime.go]**
 
-### 7.8 Decomposition — realized (Form 0)
-
-Large tasks are handled by **decomposition**: splitting one EPIC into multiple
-independent, recomposable bounded executions. This is model behavior expressed
-as **data** (`motive.tasks/plan.md` + per-unit `brief.md`), never a runtime
-planner or sub-agent. A unit runs in its own fresh context via the existing
-`shell` tool; the runtime writes a mechanical **`UnitBoundary`** record
-(status, `base_rev → result_rev`, budget usage) on every termination path, and
-the one-shot CLI gives each unit its own session transcript for recovery.
-
-Decomposition is deliberately fallible — a wrong split surfaces as a boundary
-event (`budget-exceeded` / `error` / uncomposable diff) and is repaired by
-rewriting `plan.md`, which is a hypothesis, not a contract. The parent only
-performs cheap steps (write brief → run unit → read result → write next brief);
-the heavy work runs inside fresh-context units with their own budgets.
-
-**[SOURCE: docs/decomposition.md; internal/runtime/runtime.go UnitBoundary; cmd/motive/main.go]**
-
 ---
 
 ## 8. Summary of strengths
@@ -320,7 +283,7 @@ the heavy work runs inside fresh-context units with their own budgets.
 | **Execution budget** | none or separately configured | triple guard: steps/time/tool calls |
 | **Execution isolation** | usually unclear (hidden) | explicit via Git rev ranges |
 | **Recovery** | restore context from saved session | model reads `session_log` and recovers itself |
-| **Scaling** | add modules/chains/agents | EPIC decomposition (fresh context per unit) |
+| **Scaling** | add modules/chains/agents | bounded execution + fresh context per run |
 
 ### 8.2 Motive's specific strengths
 
@@ -336,17 +299,12 @@ the heavy work runs inside fresh-context units with their own budgets.
 
 ## 9. Frontier
 
-Decomposition (Form 0) is **realized** (§7.8). What remains is the deferred,
-out-of-scope work:
+What remains is the deferred, out-of-scope work:
 
 - **Track A — context lifecycle**: trimming/compaction for a single execution
   remains out of scope (`stable-semantics.md` §23).
 - **Autonomous policy self-modification** (`stable-semantics.md` §20 item 5):
   a later, separate frontier.
-- **Generalized multi-unit orchestration**: the boundary machinery is verified,
-  but reliable large-scale decomposition across many units remains a model
-  skill demonstrated by one experiment, not a runtime guarantee.
-  **[SOURCE: docs/decomposition.md §12]**
 
 ---
 
@@ -357,10 +315,9 @@ out-of-scope work:
 | **Stateless context** | reproducibility, contamination prevention, scalability | runtime.go Execute |
 | **Workspace + Git = persistent state** | files and revisions are the only real state | stable-semantics.md §3 |
 | **No agent framework** | the model is the best planner; extra layers are failure points | runtime.go, systemPrompt |
-| **No compaction** | Track B (fresh context per unit) is the root solution | docs/decomposition.md §2 |
+| **No compaction** | fresh context per execution is the root solution | stable-semantics.md §6 |
 | **Runtime observation** | the model must perceive its own execution to optimize it | runtime.go Observation.Format |
 | **Session = transcript** | a record instead of context; re-judge rather than reconstruct | session.go |
 | **Bounded execution** | safety boundary, separate from the model's reasoning budget | runtime.go, config.go |
 | **Tool failure ≠ termination** | gives the model a chance to recover | runtime.go toolFailed |
 | **xhigh escalation** | induces focused reasoning after failure | runtime.go effort switching |
-| **Decomposition (Form 0)** | one EPIC = many fresh-context bounded units; data-driven (`brief.md`), not a runtime planner | docs/decomposition.md, runtime.go UnitBoundary |

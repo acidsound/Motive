@@ -318,14 +318,12 @@ See [docs/design-rationale.md](docs/design-rationale.md) (English) / [docs/desig
 
 - Why **stateless** (fresh context per request)
 - How **context** is determined
-- Why **no context compaction** (decomposition over compression)
+- Why **no context compaction** (fresh context per execution)
 - Motive's unique system advantages
 
 ## Design docs
 
 - [docs/stable-semantics.md](docs/stable-semantics.md) — canonical semantics of the current implementation.
-- [docs/decomposition.md](docs/decomposition.md) — model-delegated decomposition and unit boundary protocol (Form 0, realized in code).
-- [docs/experiment-form0.md](docs/experiment-form0.md) — the Form 0 decomposition experiment record.
 
 ## Status
 

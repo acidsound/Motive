@@ -165,17 +165,10 @@ Motive는 "모델이 다음에 무엇을 할지" 판단하지 않습니다.
 ### 6.1 문제: Compaction은 근본 해결책이 아니다
 
 컨텍스트 트리밍(trimming)이나 컴팩션(compaction)은  
-**한 실행(execution)의 천장(ceiling)을 높일 뿐**입니다.
+**한 실행(execution)의 천장(ceiling)을 높일 뿐**입니다.  
+한 컨텍스트 윈도우를 초과하는 작업은 아무리 잘 압축해도 한 컨텍스트에 맞지 않습니다.
 
-```
-Track A (context lifecycle):   한 컨텍스트의 수명을 연장
-Track B (decomposition):       여러 독립 실행으로 분할
-```
-
-Motive는 **Track B**를 선택했습니다.  
-그 이유는 EPIC(큰 작업)이 아무리 잘 압축된 한 컨텍스트에도 맞지 않기 때문입니다.
-
-**[SOURCE: docs/decomposition.md §2]**
+Motive의 접근: **각 실행이 신선하게 시작합니다.** 작업이 한 실행에 너무 크면, 모델(또는 사용자)이 워크스페이스와 Git 상태를 통해 조정하는 여러 독립 실행으로 분할합니다.
 
 ### 6.2 Compaction의 구체적 문제점
 
@@ -192,24 +185,13 @@ Motive는 **Track B**를 선택했습니다.
    어떤 메시지를 유지/제거할지, 어떻게 요약할지 결정하는 것은  
    모델 수준의 판단이 필요하며, 이는 "모델이 판단한다"는 원칙과 충돌합니다.
 
-### 6.3 대안: Fresh Context per Unit
-
-대형 작업은 **여러 신선한 컨텍스트**로 분할합니다. 각 유닛은:
-- 자체 실행 예산
-- 자체 타임아웃
-- 자체 Git revision 범위
-- 자체 세션
-
-유닛 간 조정은 워크스페이스 + Git delta를 통해 이루어집니다.  
-이것이 `docs/decomposition.md`의 핵심입니다.
-
-### 6.4 Fresh 재판단이 Stale 요약보다 낫다
+### 6.3 Fresh 재판단이 Stale 요약보다 낫다
 
 컴팩션은 과거 컨텍스트를 요약해서 현재 모델이 "요약된 과거"를 봅니다.  
-Fresh context 방법은 유닛의 `brief.md` + Git diff를 보고 **신선하게** 재판단합니다.
+Fresh context 방법은 워크스페이스 상태와 Git diff를 보고 **신선하게** 재판단합니다.
 
 > **요약은 요약자의 편향을 담고 있습니다.  
-> 신선한 재판단은 원본 증거(brief + diff)를 직접 봅니다.**
+> 신선한 재판단은 원본 증거(워크스페이스 + diff)를 직접 봅니다.**
 
 ---
 
@@ -284,22 +266,6 @@ Runtime은 각 스텝 전에 컨텍스트 추정 토큰 수를 계산합니다:
 안전 경계(safety boundary)로, 모델 추론 예산이 아닙니다.  
 **[SOURCE: config.go, runtime.go]**
 
-### 7.8 분해(Decomposition) — 구현 완료 (Form 0)
-
-대형 작업은 **분해(decomposition)**를 통해 처리됩니다: 하나의 EPIC을 여러 독립적이고 재조합 가능한
-바운디드 실행(bounded execution)으로 분할합니다. 이는 **데이터**로 표현된 모델 행동입니다
-(`motive.tasks/plan.md` + 유닛별 `brief.md`). 런타임 플래너나 서브에이전트가 아닙니다.
-유닛은 기존 `shell` 도구를 통해 자체 신선한 컨텍스트에서 실행됩니다.
-런타임은 모든 종료 경로에서 기계적인 **`UnitBoundary`** 레코드(상태, `base_rev → result_rev`,
-예산 사용량)를 작성하며, one-shot CLI는 각 유닛에 자체 세션 트랜스크립트를 부여하여 복구를 지원합니다.
-
-분해는 의도적으로 오류 가능성을 내포합니다 — 잘못된 분할은 경계 이벤트(`budget-exceeded` / `error` /
-조립 불가능한 diff)로 표면화되며, `plan.md`를 다시 작성하여 수정합니다. `plan.md`는 가설(hypothesis)이지
-계약(contract)이 아닙니다. 상위(parent)는 저렴한 단계(brief 작성 → 유닛 실행 → 결과 읽기 → 다음 brief 작성)만
-수행하고, 무거운 작업은 자체 예산을 가진 신선한 컨텍스트 유닛 내부에서 실행됩니다.
-
-**[SOURCE: docs/decomposition.md; internal/runtime/runtime.go UnitBoundary; cmd/motive/main.go]**
-
 ---
 
 ## 8. 장점 요약
@@ -316,7 +282,7 @@ Runtime은 각 스텝 전에 컨텍스트 추정 토큰 수를 계산합니다:
 | **실행 예산** | 제한 없거나 별도 설정 | 스텝/시간/도구 호출 3중 안전 장치 |
 | **실행 격리** | 대개 불명확 (숨김) | Git rev range로 명시 |
 | **복구** | 세션 복원으로 컨텍스트 복구 | 모델이 session_log 읽고 자체 복구 |
-| **확장** | 모듈/체인/에이전트 추가 | EPIC decomposition (fresh context per unit) |
+| **확장** | 모듈/체인/에이전트 추가 | 바운디드 execution + fresh context per run |
 
 ### 8.2 Motive만의 강점
 
@@ -332,16 +298,12 @@ Runtime은 각 스텝 전에 컨텍스트 추정 토큰 수를 계산합니다:
 
 ## 9. 앞으로의 방향 (Frontier)
 
-분해(Form 0)는 **구현 완료**되었습니다(§7.8). 남은 것은 보류/범위 외 작업입니다:
+남은 것은 보류/범위 외 작업입니다:
 
 - **Track A — 컨텍스트 생명주기(context lifecycle)**: 단일 실행의 트리밍/컴팩션은
   아직 범위 외(`stable-semantics.md` §23).
 - **자율 정책 자체 수정(autonomous policy self-modification)**
   (`stable-semantics.md` §20 항목 5): 이후의 별도 프론티어.
-- **일반화된 다중 유닛 오케스트레이션**: 경계 기계(boundary machinery)는 검증되었지만,
-  여러 유닛에 걸친 신뢰할 수 있는 대규모 분해는 아직 한 실험에서 입증된 모델 스킬일 뿐,
-  런타임 보장이 아닙니다.
-  **[SOURCE: docs/decomposition.md §12]**
 
 ---
 
@@ -352,10 +314,9 @@ Runtime은 각 스텝 전에 컨텍스트 추정 토큰 수를 계산합니다:
 | **Stateless context** | 재현성, 오염 방지, 확장성 | runtime.go Execute |
 | **Workspace + Git = 영속 상태** | 파일과 revision이 유일한 진짜 상태 | stable-semantics.md §3 |
 | **No agent framework** | 모델이 최고의 플래너, 추가 계층은 장애 지점 | runtime.go, systemPrompt |
-| **No compaction** | Track B (fresh context per unit)가 근원 해결 | docs/decomposition.md §2 |
+| **No compaction** | fresh context per execution가 근원 해결 | stable-semantics.md §6 |
 | **Runtime observation** | 모델이 자신의 실행을 인식해야 최적화 가능 | runtime.go Observation.Format |
 | **Session = transcript** | 컨텍스트 대신 기록, 재구성보다 재판단 | session.go |
 | **Bounded execution** | 안전 경계, 모델의 추론 예산과 분리 | runtime.go, config.go |
 | **Tool failure ≠ termination** | 모델이 회복할 기회 제공 | runtime.go toolFailed |
 | **xhigh escalation** | 실패 후 집중 추론 유도 | runtime.go effort 스위칭 |
-| **분해(Decomposition) (Form 0)** | 하나의 EPIC = 여러 신선한 컨텍스트 바운디드 유닛; 데이터 기반(`brief.md`), 런타임 플래너 아님 | docs/decomposition.md, runtime.go UnitBoundary |

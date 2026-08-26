@@ -145,11 +145,9 @@ The active session id is passed into the model context each turn, and the `sessi
 
 Every one-shot execution produces a mechanical, runtime-written boundary record (`UnitBoundary` in `internal/runtime/runtime.go`): status (`completed` | `budget-exceeded` | `error`), steps and tool calls used, tool failures, base→result Git revisions, elapsed time, and best-effort assistant text. It is emitted on every termination path (clean, budget, model error, cancel). **[SOURCE][TEST]**
 
-The one-shot CLI creates a per-run unit session and appends the boundary record as a `unit`-role entry; the session id is printed in-band on stderr and is readable via `session_log` with an explicit `session_id`. This is the telemetry that lets a parent execution reconstitute a unit's outcome (status, revision delta, budget usage) without replaying the unit's context. **[SOURCE][OBSERVED]**
+The one-shot CLI creates a per-run session and appends the boundary record as a `unit`-role entry; the session id is printed in-band on stderr and is readable via `session_log` with an explicit `session_id`. This is durable telemetry of the execution's outcome (status, revision delta, budget usage) that does not require replaying the execution's context. **[SOURCE][OBSERVED]**
 
-The boundary record is mechanical only: it never judges task correctness. Whether a unit met its `brief.md` exit criteria is re-judged by the next fresh execution from the brief + Git delta. **[SOURCE][RATIONALE]**
-
-Unit boundary records, `brief.md`/`plan.md` coordination files, and the decomposition protocol are specified in `docs/decomposition.md`. **[DECISION]**
+The boundary record is mechanical only: it never judges task correctness. **[SOURCE][DECISION]**
 
 ## 9. Reasoning effort
 
