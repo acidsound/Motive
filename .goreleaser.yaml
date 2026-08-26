@@ -10,11 +10,7 @@ builds:
       - CGO_ENABLED=0
     goos:
       - linux
-      - darwin
       - windows
-    # Publish exactly one artifact per platform.
-    # arm64 builds are intentionally omitted so the release has only
-    # linux, darwin (macOS), and windows artifacts.
     goarch:
       - amd64
     flags:
@@ -22,8 +18,32 @@ builds:
     ldflags:
       - -s -w -X github.com/acidsound/Motive/internal/version.Version={{.Version}}
 
+  - id: motive-darwin
+    main: ./cmd/motive
+    binary: motive
+    env:
+      - CGO_ENABLED=0
+    goos:
+      - darwin
+    goarch:
+      - amd64
+      - arm64
+    flags:
+      - -trimpath
+    ldflags:
+      - -s -w -X github.com/acidsound/Motive/internal/version.Version={{.Version}}
+
+universal_binaries:
+  - id: motive-universal
+    ids:
+      - motive-darwin
+    replace: true
+    name_template: "motive_{{ .Version }}_darwin_universal"
+
 archives:
-  - id: motive
+  - id: motive-platforms
+    ids:
+      - motive
     formats:
       - tar.gz
     name_template: "{{ .ProjectName }}_{{ .Version }}_{{ .Os }}_{{ .Arch }}"
@@ -31,6 +51,18 @@ archives:
       - goos: windows
         formats:
           - zip
+
+  - id: motive-macos
+    ids:
+      - motive-darwin
+      - motive-universal
+    formats:
+      - tar.gz
+    name_template: "{{ .ProjectName }}_{{ .Version }}_darwin_universal"
+    format_overrides:
+      - goos: darwin
+        formats:
+          - tar.gz
 
 checksum:
   name_template: "checksums.txt"
