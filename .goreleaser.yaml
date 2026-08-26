@@ -68,17 +68,17 @@ archives:
 checksum:
   name_template: "checksums.txt"
 
+# Keep GitHub Release notes concise instead of listing the full commit history.
 changelog:
-  sort: asc
-  filters:
-    exclude:
-      - "^docs:"
-      - "^test:"
-      - "^chore:"
-      - "^merge:"
-      - "^ci:"
+  disable: true
 
 release:
   mode: replace
-  # Fixed semver tag (v0.0.0) => one rolling release, titled "Latest".
   name_template: "Latest"
+  header: |
+    ## Motive
+
+    Latest build with cross-platform binaries:
+    - Linux amd64 / arm64
+    - macOS Universal (Intel + Apple Silicon)
+    - Windows amd64
