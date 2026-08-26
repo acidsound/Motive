@@ -80,10 +80,9 @@ line shows which provider * model the run is using (e.g.
 `local * gpt-4o-2024…`); long names are truncated to 20 characters so the
 busy line never stretches. stdout stays reserved for the final result, so
 piping (`./bin/motive "request" | jq`) captures only the answer. `--silent`
-disables the animation entirely and prints just the result (the run's
-unit-session marker on stderr is kept so parent executions can still read the
-boundary record); the animation also stays off when stderr is not a terminal
-or when `-v` telemetry is enabled.
+disables the animation entirely and prints just the result; the animation
+also stays off when stderr is not a terminal or when `-v` telemetry is
+enabled.
 
 ## First-run setup
 

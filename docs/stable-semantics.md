@@ -127,11 +127,13 @@ The state directory for session storage defaults to `~/.motive` and is overridab
 
 ## 8. Session persistence
 
-Motive persists conversation transcripts as append-only JSONL files under the state directory. Each entry records a timestamp, role (user/assistant/tool/error/stopped/unit), content, optional reasoning, optional tool calls, base/result Git revisions, and elapsed time. **[SOURCE]**
+Motive persists conversation transcripts as append-only JSONL files under the state directory. Each entry records a timestamp, role (user/assistant/tool/error/stopped), content, optional reasoning, optional tool calls, base/result Git revisions, and elapsed time. **[SOURCE]**
 
-`tool`, `stopped`, and `unit` are Motive transcript roles, not chat API roles: they are never sent to a model as message roles. A `unit` entry is the runtime-written mechanical boundary record (status, revision delta, budget usage, best-effort text) of a one-shot execution; its content is one compact JSON line. **[SOURCE]**
+`tool` and `stopped` are Motive transcript roles, not chat API roles: they are never sent to a model as message roles. **[SOURCE]**
 
 A new session is created on the first user submission in the TUI. Subsequent turns append to the same session file. **[SOURCE]**
+
+One-shot CLI runs do not persist a transcript; session persistence is a TUI capability. **[SOURCE]**
 
 When a run is interrupted by an error after partial output has streamed, the TUI persists the in-progress assistant entry (content, reasoning, tool calls) to the transcript before recording the error, so an interrupted run leaves a complete record of its in-progress work. An empty assistant placeholder is not persisted. **[SOURCE][TEST]**
 
@@ -140,14 +142,6 @@ The TUI provides a session picker (`Ctrl+R` or `--tui -r`) that lists prior sess
 Session persistence is a transcript record, not a model context. Resuming a session does not restore model context; the next execution still starts with a fresh model context per the invariant in §3. **[SOURCE][DECISION]**
 
 The active session id is passed into the model context each turn, and the `session_log` tool can read the tail of the session transcript. Because the transcript is persisted in JSONL, an execution interrupted by a failure can be continued by a later execution that reads the transcript through `session_log` and resumes where the previous run left off; no in-memory continuation state is carried across runs. **[SOURCE][DECISION]**
-
-### 8.1 Unit boundary record
-
-Every one-shot execution produces a mechanical, runtime-written boundary record (`UnitBoundary` in `internal/runtime/runtime.go`): status (`completed` | `budget-exceeded` | `error`), steps and tool calls used, tool failures, base→result Git revisions, elapsed time, and best-effort assistant text. It is emitted on every termination path (clean, budget, model error, cancel). **[SOURCE][TEST]**
-
-The one-shot CLI creates a per-run session and appends the boundary record as a `unit`-role entry; the session id is printed in-band on stderr and is readable via `session_log` with an explicit `session_id`. This is durable telemetry of the execution's outcome (status, revision delta, budget usage) that does not require replaying the execution's context. **[SOURCE][OBSERVED]**
-
-The boundary record is mechanical only: it never judges task correctness. **[SOURCE][DECISION]**
 
 ## 9. Reasoning effort
 
