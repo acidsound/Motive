@@ -14,7 +14,7 @@ concurrency:
 
 jobs:
   release:
-    runs-on: ubuntu-latest
+    runs-on: macos-latest
     steps:
       - name: Check out repository
         uses: actions/checkout@v4
@@ -35,7 +35,7 @@ jobs:
           GOOS: linux
           GOARCH: amd64
           CGO_ENABLED: 0
-        run: go build -o motive ./
+        run: go build -trimpath -ldflags="-s -w" -o motive ./cmd/motive
 
       - name: Package Linux amd64
         run: tar -czf "motive_${GITHUB_REF_NAME}_linux_amd64.tar.gz" motive
@@ -45,7 +45,7 @@ jobs:
           GOOS: linux
           GOARCH: arm64
           CGO_ENABLED: 0
-        run: go build -o motive ./
+        run: go build -trimpath -ldflags="-s -w" -o motive ./cmd/motive
 
       - name: Package Linux arm64
         run: tar -czf "motive_${GITHUB_REF_NAME}_linux_arm64.tar.gz" motive
@@ -55,7 +55,7 @@ jobs:
           GOOS: windows
           GOARCH: amd64
           CGO_ENABLED: 0
-        run: go build -o motive.exe ./
+        run: go build -trimpath -ldflags="-s -w" -o motive.exe ./cmd/motive
 
       - name: Package Windows amd64
         run: zip "motive_${GITHUB_REF_NAME}_windows_amd64.zip" motive.exe
@@ -65,27 +65,24 @@ jobs:
           GOOS: darwin
           GOARCH: amd64
           CGO_ENABLED: 0
-        run: go build -o motive-darwin-amd64 ./
+        run: go build -trimpath -ldflags="-s -w" -o motive-darwin-amd64 ./cmd/motive
 
       - name: Build macOS arm64
         env:
           GOOS: darwin
           GOARCH: arm64
           CGO_ENABLED: 0
-        run: go build -o motive-darwin-arm64 ./
+        run: go build -trimpath -ldflags="-s -w" -o motive-darwin-arm64 ./cmd/motive
 
-      - name: Build macOS Universal
+      - name: Create macOS Universal Binary
         run: |
-          brew install llvm
-          /usr/local/opt/llvm/bin/lipo -create \
-            motive-darwin-amd64 motive-darwin-arm64 \
-            -output motive
+          lipo -create motive-darwin-amd64 motive-darwin-arm64 -output motive
 
       - name: Package macOS Universal
         run: tar -czf "motive_${GITHUB_REF_NAME}_darwin_universal.tar.gz" motive
 
       - name: Generate checksums
-        run: sha256sum motive_*.tar.gz motive_*.zip > checksums.txt
+        run: sha256 -a 256 motive_*.tar.gz motive_*.zip > checksums.txt
 
       - name: Create GitHub Release
         env:
