@@ -1,15 +1,15 @@
 name: Release
 
 on:
-  workflow_dispatch:
+  push:
+    tags:
+      - "*"
 
 permissions:
   contents: write
 
-# Serialize release runs so two goreleaser invocations can never overlap on
-# the same tag.
 concurrency:
-  group: release
+  group: release-${{ github.ref_name }}
   cancel-in-progress: false
 
 jobs:
@@ -30,28 +30,73 @@ jobs:
       - name: Run tests
         run: go test ./...
 
-      # Fixed tag => one rolling "Latest" release rebuilt on demand.
-      # Must be valid semver for GoReleaser; the release is titled "Latest"
-      # via .goreleaser.yaml (release.name).
-      - name: Tag for release
-        id: tag
-        run: |
-          TAG="v0.0.0"
-          git tag -f "$TAG"
-          git push origin "$TAG" --force
-          echo "tag=$TAG" >> "$GITHUB_OUTPUT"
+      - name: Build Linux amd64
+        env:
+          GOOS: linux
+          GOARCH: amd64
+          CGO_ENABLED: 0
+        run: go build -o motive ./
 
-      # Start from a clean slate: drop any prior release (and all its assets)
-      # so goreleaser always creates a fresh one instead of stacking assets.
-      - name: Delete existing release
-        run: gh release delete "${{ steps.tag.outputs.tag }}" --yes 2>/dev/null || true
+      - name: Package Linux amd64
+        run: tar -czf "motive_${GITHUB_REF_NAME}_linux_amd64.tar.gz" motive
+
+      - name: Build Linux arm64
+        env:
+          GOOS: linux
+          GOARCH: arm64
+          CGO_ENABLED: 0
+        run: go build -o motive ./
+
+      - name: Package Linux arm64
+        run: tar -czf "motive_${GITHUB_REF_NAME}_linux_arm64.tar.gz" motive
+
+      - name: Build Windows amd64
+        env:
+          GOOS: windows
+          GOARCH: amd64
+          CGO_ENABLED: 0
+        run: go build -o motive.exe ./
+
+      - name: Package Windows amd64
+        run: zip "motive_${GITHUB_REF_NAME}_windows_amd64.zip" motive.exe
+
+      - name: Build macOS amd64
+        env:
+          GOOS: darwin
+          GOARCH: amd64
+          CGO_ENABLED: 0
+        run: go build -o motive-darwin-amd64 ./
+
+      - name: Build macOS arm64
+        env:
+          GOOS: darwin
+          GOARCH: arm64
+          CGO_ENABLED: 0
+        run: go build -o motive-darwin-arm64 ./
+
+      - name: Build macOS Universal
+        run: |
+          brew install llvm
+          /usr/local/opt/llvm/bin/lipo -create \
+            motive-darwin-amd64 motive-darwin-arm64 \
+            -output motive
+
+      - name: Package macOS Universal
+        run: tar -czf "motive_${GITHUB_REF_NAME}_darwin_universal.tar.gz" motive
+
+      - name: Generate checksums
+        run: sha256sum motive_*.tar.gz motive_*.zip > checksums.txt
+
+      - name: Create GitHub Release
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
-
-      - name: Run GoReleaser
-        uses: goreleaser/goreleaser-action@v6
-        with:
-          version: "~> v2"
-          args: release --clean
-        env:
-          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          gh release create "${GITHUB_REF_NAME}" \
+            motive_${GITHUB_REF_NAME}_linux_amd64.tar.gz \
+            motive_${GITHUB_REF_NAME}_linux_arm64.tar.gz \
+            motive_${GITHUB_REF_NAME}_darwin_universal.tar.gz \
+            motive_${GITHUB_REF_NAME}_windows_amd64.zip \
+            checksums.txt \
+            --title "Motive ${GITHUB_REF_NAME}" \
+            --notes "## Motive ${GITHUB_REF_NAME}\n\nCross-platform release for Windows x86-64, Linux x86-64, Linux ARM64 (Android/Termux), and macOS Universal (Intel + Apple Silicon)." \
+            --verify-tag
