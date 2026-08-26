@@ -88,6 +88,11 @@ jobs:
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
         run: |
+          if [ -f RELEASE_NOTES.md ]; then
+            NOTES=$(cat RELEASE_NOTES.md)
+          else
+            NOTES="## Motive ${GITHUB_REF_NAME}\n\nCross-platform release for Windows x86-64, Linux x86-64, Linux ARM64 (Android/Termux), and macOS Universal (Intel + Apple Silicon)."
+          fi
           gh release create "${GITHUB_REF_NAME}" \
             motive_${GITHUB_REF_NAME}_linux_amd64.tar.gz \
             motive_${GITHUB_REF_NAME}_linux_arm64.tar.gz \
@@ -95,5 +100,5 @@ jobs:
             motive_${GITHUB_REF_NAME}_windows_amd64.zip \
             checksums.txt \
             --title "Motive ${GITHUB_REF_NAME}" \
-            --notes "## Motive ${GITHUB_REF_NAME}\n\nCross-platform release for Windows x86-64, Linux x86-64, Linux ARM64 (Android/Termux), and macOS Universal (Intel + Apple Silicon)." \
+            --notes "${NOTES}" \
             --verify-tag
