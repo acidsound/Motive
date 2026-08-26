@@ -34,24 +34,62 @@ commit-hash tag for CI releases).
 ## Release
 
 Binaries are **never built locally for distribution**. GitHub Actions builds
-them with [GoReleaser](.goreleaser.yaml) when a release is triggered manually.
-The release uses the fixed rolling tag `v0.0.0`, while the GitHub Release itself
-is titled `Latest`.
+them automatically when a Git tag is pushed (see
+[.github/workflows/release.yml](.github/workflows/release.yml)).
 
-The current release publishes four platform archives:
+The release publishes four platform archives:
 
 | Asset | Platform | Details |
 | --- | --- | --- |
-| `motive_0.0.0_windows_amd64.zip` | Windows | Windows x86-64 (64-bit Intel/AMD) |
-| `motive_0.0.0_linux_amd64.tar.gz` | Linux | Linux x86-64 (64-bit Intel/AMD) |
-| `motive_0.0.0_linux_arm64.tar.gz` | Linux / Android | Linux ARM64; intended for ARM64 Linux systems and Android devices running Termux. This is a Termux executable, not an Android APK. |
-| `motive_0.0.0_darwin_universal.tar.gz` | macOS | Universal Binary containing both Intel (amd64) and Apple Silicon (arm64) builds |
+| `motive_<tag>_windows_amd64.zip` | Windows | Windows x86-64 (64-bit Intel/AMD) |
+| `motive_<tag>_linux_amd64.tar.gz` | Linux | Linux x86-64 (64-bit Intel/AMD) |
+| `motive_<tag>_linux_arm64.tar.gz` | Linux / Android | Linux ARM64; intended for ARM64 Linux systems and Android devices running Termux. This is a Termux executable, not an Android APK. |
+| `motive_<tag>_darwin_universal.tar.gz` | macOS | Universal Binary containing both Intel (amd64) and Apple Silicon (arm64) builds |
 
 A `checksums.txt` file is published alongside the archives.
 
-For Android, install Termux and use the `linux_arm64` archive. The binary is
-built with `CGO_ENABLED=0`, so it does not require the Android NDK or an Android
-APK packaging layer just to run as a Termux command-line application.
+### Installation
+
+**macOS / Linux**
+
+```bash
+# download the archive for your platform from the GitHub Release page
+curl -LO https://github.com/your-org/motive/releases/download/<tag>/motive_<tag>_darwin_universal.tar.gz  # macOS
+# or
+curl -LO https://github.com/your-org/motive/releases/download/<tag>/motive_<tag>_linux_amd64.tar.gz  # Linux x86-64
+
+tar -xzf motive_<tag>_*.tar.gz
+sudo install -m 755 motive /usr/local/bin/motive
+```
+
+**Windows**
+
+```powershell
+# download and extract the zip, then add to PATH
+Expand-Archive motive_<tag>_windows_amd64.zip -DestinationPath $env:LOCALAPPDATA\motive
+# add $env:LOCALAPPDATA\motive to your PATH
+```
+
+**Android (Termux)**
+
+```bash
+pkg install unzip
+# download motive_<tag>_linux_arm64.tar.gz, then:
+tar -xzf motive_<tag>_linux_arm64.tar.gz
+mv motive ~/local/bin/
+```
+
+The binary is built with `CGO_ENABLED=0`, so it does not require the Android NDK
+or an Android APK packaging layer.
+
+### Verify checksum
+
+```bash
+# macOS / Linux
+shasum -a 256 -c checksums.txt
+# Windows (PowerShell)
+Get-FileHash motive_<tag>_* -Algorithm SHA256
+```
 
 ## Run
 
