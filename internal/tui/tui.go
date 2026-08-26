@@ -121,6 +121,43 @@ func unitSessionID(head string) (string, bool) {
 	return "", false
 }
 
+// busyPhase identifies what the runtime is doing while busy, so the busy
+// line can distinguish the long phases instead of a generic "working…":
+//   - phasePrefill: a model request is in flight and no stream byte has
+//     arrived yet — the server is still processing the prompt (reasoning
+//     models can spend minutes here before the first token)
+//   - phaseReasoning: stream deltas arrive, but only reasoning text so far —
+//     the model is thinking before its answer
+//   - phaseTooling: a tool call is executing (the transcript's live tool
+//     line shows which)
+//   - phaseAnswering: content deltas arrive — the final answer is being
+//     written
+//   - phaseWorking: generic fallback (startup gap, between phases)
+type busyPhase int
+
+const (
+	phaseWorking busyPhase = iota
+	phasePrefill
+	phaseReasoning
+	phaseTooling
+	phaseAnswering
+)
+
+// String renders the phase name, used by the busy line and tests.
+func (p busyPhase) String() string {
+	switch p {
+	case phasePrefill:
+		return "prefill"
+	case phaseReasoning:
+		return "reasoning"
+	case phaseTooling:
+		return "tooling"
+	case phaseAnswering:
+		return "answering"
+	}
+	return "working"
+}
+
 type model struct {
 	rt    *runtime.Runtime
 	cfg   *config.Config
@@ -150,6 +187,20 @@ type model struct {
 	// steerMode selects what enter does while busy: false queues the text for
 	// the next turn, true steers the running execution.
 	steerMode bool
+
+	// phase is what the runtime is currently doing while busy (see busyPhase):
+	// prefill (waiting for the first response bytes), reasoning (the model is
+	// thinking), tooling (a tool call is executing), or answering (the final
+	// answer is streaming). The busy line labels the phase instead of a
+	// generic "working…", and every phase advertises the stop binding so the
+	// user — not a hard timeout — decides when a slow phase has waited long
+	// enough.
+	phase busyPhase
+	// phaseStart is when the current phase began; phaseElapsed is refreshed
+	// by the spinner tick while a phase with no visible output (prefill,
+	// reasoning) runs, so the busy line can show the elapsed wait live.
+	phaseStart   time.Time
+	phaseElapsed time.Duration
 
 	width  int
 	height int
@@ -397,6 +448,13 @@ func (m *model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 	case spinner.TickMsg:
 		var cmd tea.Cmd
 		m.spin, cmd = m.spin.Update(msg)
+		// While a phase with no visible output runs (prefill — waiting for
+		// the first response bytes — or reasoning — thinking before the
+		// answer), keep the elapsed time fresh so the busy line can show how
+		// long the wait has been running.
+		if (m.phase == phasePrefill || m.phase == phaseReasoning) && !m.phaseStart.IsZero() {
+			m.phaseElapsed = time.Since(m.phaseStart)
+		}
 		return m, cmd
 
 	case tea.WindowSizeMsg:
@@ -739,6 +797,7 @@ func (m *model) startTurn(request string, attachments []attachItem) (tea.Model, 
 	m.stopping = false
 	m.stoppedPersisted = false
 	m.stopCancel = nil
+	m.phase = phaseWorking
 	if m.rt != nil {
 		m.maxSteps = m.rt.Budget.MaxSteps
 		m.rt.Stream = true
@@ -866,6 +925,7 @@ func (m *model) nextQueued() (tea.Model, tea.Cmd) {
 
 func (m *model) finishTurn(done doneMsg) (tea.Model, tea.Cmd) {
 	m.busy = false
+	m.phase = phaseWorking
 	// A user stop surfaces as a canceled context. If the turn nevertheless
 	// finished cleanly (done.err == nil), treat it as a normal success.
 	stopped := m.stopping && done.err != nil
@@ -983,8 +1043,17 @@ func (m *model) handleTrace(event runtime.TraceEvent) (tea.Model, tea.Cmd) {
 		if event.ContextTokens > 0 {
 			m.lastCtx = event.ContextTokens
 		}
+		// A fresh model request: we are waiting for the first response bytes
+		// (prefill). The busy line shows the elapsed wait and the stop binding
+		// until a delta (or a terminal event) arrives.
+		m.phase = phasePrefill
+		m.phaseStart = time.Now()
+		m.phaseElapsed = 0
 
 	case "model_end":
+		// The server responded; the next event is tooling or the end of the
+		// turn, so fall back to the generic working state.
+		m.phase = phaseWorking
 		if event.ContextTokens > 0 {
 			m.lastCtx = event.ContextTokens
 		}
@@ -1000,6 +1069,19 @@ func (m *model) handleTrace(event runtime.TraceEvent) (tea.Model, tea.Cmd) {
 		}
 
 	case "delta":
+		// The first delta ends the prefill wait. Distinguish the stream
+		// phase: a reasoning delta means the model is thinking before its
+		// answer, a content delta means the final answer is being written.
+		if event.Text != "" {
+			m.phase = phaseAnswering
+		} else if event.Reasoning != "" {
+			// Entering the reasoning phase: start its elapsed timer once.
+			if m.phase != phaseReasoning {
+				m.phase = phaseReasoning
+				m.phaseStart = time.Now()
+				m.phaseElapsed = 0
+			}
+		}
 		last := m.assistantSlot()
 		if event.Text != "" {
 			last.content += event.Text
@@ -1009,6 +1091,7 @@ func (m *model) handleTrace(event runtime.TraceEvent) (tea.Model, tea.Cmd) {
 		}
 
 	case "tool_start":
+		m.phase = phaseTooling
 		last := m.assistantSlot()
 		last.liveTool = liveToolLine(event.ToolName, event.ToolArgs)
 
@@ -1031,6 +1114,7 @@ func (m *model) handleTrace(event runtime.TraceEvent) (tea.Model, tea.Cmd) {
 
 	case "finish":
 		m.busy = false
+		m.phase = phaseWorking
 		m.resultRev = event.ResultRevision
 		m.elapsed = event.TotalElapsed
 	}
@@ -1397,6 +1481,43 @@ func (m *model) openUnits() {
 	m.overlay = overlayUnits
 }
 
+// busyLine renders the busy line while the runtime is working. Instead of a
+// generic "working…" it labels the phase, so a long wait is never ambiguous:
+//   - prefill: waiting for the first bytes of the model response (the server
+//     is still processing the prompt); shows the elapsed wait live
+//   - reasoning: the model is streaming reasoning text (thinking); shows the
+//     elapsed thinking time live
+//   - tooling: a tool call is running (the transcript's live tool line shows
+//     which)
+//   - answering: the final answer is streaming in
+//
+// The stop binding is advertised in every phase: the user — not a hard
+// timeout — decides when a slow phase has waited long enough.
+func (m model) busyLine() string {
+	elapsed := m.phaseElapsed.Round(time.Second)
+	switch m.phase {
+	case phasePrefill:
+		return m.spin.View() + " " +
+			styleDim.Render("waiting for model response ") +
+			styleEffort.Render("("+elapsed.String()+")") +
+			styleDim.Render(" · "+string(m.keys.Stop)+" to cancel")
+	case phaseReasoning:
+		return m.spin.View() + " " +
+			styleDim.Render("reasoning ") +
+			styleEffort.Render("("+elapsed.String()+")") +
+			styleDim.Render(" · "+string(m.keys.Stop)+" to cancel")
+	case phaseTooling:
+		return m.spin.View() + " " +
+			styleDim.Render("running tool") +
+			styleDim.Render(" · "+string(m.keys.Stop)+" to cancel")
+	case phaseAnswering:
+		return m.spin.View() + " " +
+			styleDim.Render("answering") +
+			styleDim.Render(" · "+string(m.keys.Stop)+" to cancel")
+	}
+	return m.spin.View() + " " + styleDim.Render("working…")
+}
+
 // renderTranscript lays out every message (newest at the bottom), applies the
 // scroll offset, and returns the visible lines. It also records the viewport's
 // position within the full transcript for the scroll position indicator.
@@ -1408,7 +1529,7 @@ func (m *model) renderTranscript(width, available int) []string {
 		all = append(all, "")
 	}
 	if m.busy {
-		all = append(all, m.spin.View()+" "+styleDim.Render("working…"))
+		all = append(all, m.busyLine())
 		all = append(all, "")
 	}
 	start := 0
@@ -1508,17 +1629,20 @@ func (m model) renderMessage(msg message, width int) []string {
 // affected-line count when known), the query for web_search, and a summary
 // of the fetched content for web_fetch.
 func liveToolLine(name, args string) string {
-	return toolDetail(name, args, 0, 0, "")
+	return ToolDetail(name, args, 0, 0, "")
 }
 
 // toolSummary builds the completed one-line description for a finished tool
 // call: the identifying detail from its arguments plus a size/line hint.
 func toolSummary(name, args string, resultBytes, resultLines int, head string) string {
-	return fmt.Sprintf("%s · %dB · %s", toolDetail(name, args, resultLines, resultBytes, head), resultBytes, name)
+	return fmt.Sprintf("%s · %dB · %s", ToolDetail(name, args, resultLines, resultBytes, head), resultBytes, name)
 }
 
-// toolDetail extracts the human-relevant summary of a tool invocation.
-func toolDetail(name, args string, resultLines, resultBytes int, head string) string {
+// ToolDetail extracts the human-relevant summary of a tool invocation. It is
+// shared between the TUI transcript and the one-shot CLI progress line, so
+// both surfaces describe the same call the same way (the shell command, the
+// file a read/write/edit touches, the web_search query, or the fetched URL).
+func ToolDetail(name, args string, resultLines, resultBytes int, head string) string {
 	get := func(key string) string {
 		var m map[string]any
 		if err := json.Unmarshal([]byte(args), &m); err != nil {

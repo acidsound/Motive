@@ -70,6 +70,21 @@ the request body small for vision backends; videos and any other file type
 are passed as path references the model can read with the workspace tools
 (video frames can be extracted with the shell tool, e.g. `ffmpeg`).
 
+### Command line (one-shot)
+
+A one-shot run (`./bin/motive "request"`) shows the same working micro
+animation as the TUI on stderr — the spinner plus the phase label (`waiting
+for model response (1m30s)`, `reasoning (45s)`, `running tool`, `answering`),
+with the elapsed wait live for the no-output phases. The left side of the
+line shows which provider * model the run is using (e.g.
+`local * gpt-4o-2024…`); long names are truncated to 20 characters so the
+busy line never stretches. stdout stays reserved for the final result, so
+piping (`./bin/motive "request" | jq`) captures only the answer. `--silent`
+disables the animation entirely and prints just the result (the run's
+unit-session marker on stderr is kept so parent executions can still read the
+boundary record); the animation also stays off when stderr is not a terminal
+or when `-v` telemetry is enabled.
+
 ## First-run setup
 
 On the first interactive run, when no Motive configuration exists and no
@@ -174,6 +189,7 @@ config file, the environment variables form a single "default" provider.
 | `MOTIVE_REASONING_EFFORT` | `reasoning_effort` | `low` |
 | `MOTIVE_TEMPERATURE` | `temperature` | `0.6` |
 | `MOTIVE_MAX_TOKENS` | `max_tokens` | `0` (no limit) |
+| `MOTIVE_HEADER_TIMEOUT` | — | `600` (10 min) |
 | `MOTIVE_WORKSPACE` | `workspace` | current directory |
 | `MOTIVE_STATE_DIR` | `state_dir` | `~/.motive` |
 | `MOTIVE_MAX_STEPS` | `max_steps` | `64` |
@@ -213,6 +229,26 @@ lightweight markdown, and persists every turn to a JSONL session file that
   it to a FIFO that is processed as fresh turns after the current one ends.
 - `ctrl+c` quits; while busy it stops the run first so the partial output is
   persisted before exit.
+
+While the runtime works, the busy line labels the current phase instead of a
+generic "working…", so a long wait is never ambiguous:
+
+- `waiting for model response (1m30s)` — **prefill**: the model request is in
+  flight and no byte has arrived yet (reasoning models can spend a long time
+  processing the prompt before the first token); the elapsed wait is shown
+  live.
+- `reasoning (45s)` — the model is streaming reasoning text (thinking) before
+  its answer; the elapsed thinking time is shown live.
+- `running tool` — a tool call is executing (the transcript's live tool line
+  shows which).
+- `answering` — the final answer is streaming in.
+
+Every phase advertises the `esc` stop binding: the user — not a hard timeout
+— decides when a slow phase has waited long enough. The client's
+`ResponseHeaderTimeout` defaults to a generous 10 minutes
+(`MOTIVE_HEADER_TIMEOUT` seconds; `0` disables it entirely, leaving the
+execution budget as the only bound), so long prefill is never killed by the
+client.
 
 Controls (rebindable via `MOTIVE_KEY_<NAME>`, e.g.
 `MOTIVE_KEY_SCROLL_UP=ctrl+u`):

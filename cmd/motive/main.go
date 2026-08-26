@@ -45,6 +45,7 @@ func (f *attachFlags) Set(v string) error {
 func main() {
 	tuiMode := flag.Bool("tui", false, "start the terminal UI")
 	verbose := flag.Bool("v", false, "show execution telemetry")
+	silent := flag.Bool("silent", false, "print only the result; no progress output on stderr")
 	resume := flag.Bool("r", false, "open the TUI session picker on start")
 	showVersion := flag.Bool("version", false, "print the build version and exit")
 	var attach attachFlags
@@ -94,7 +95,9 @@ func main() {
 		}
 		return b.String(), nil
 	}
-	if *verbose {
+	// Verbose telemetry and the progress animation are mutually exclusive
+	// (both render on stderr); --silent wins over -v.
+	if *verbose && !*silent {
 		rt.Trace = verboseTrace
 	}
 
@@ -105,6 +108,26 @@ func main() {
 		}
 		return
 	}
+
+	// One-shot runs show the same working micro animation as the TUI on
+	// stderr (spinner + phase label, live elapsed for prefill/reasoning),
+	// unless --silent, -v, or a non-terminal stderr disables it. stdout stays
+	// reserved for the final result, so piping captures only the answer.
+	// Streaming is enabled for the CLI too so the phase transitions (prefill,
+	// reasoning, answering, tooling) match the TUI's lifecycle live.
+	var progress *cliProgress
+	if !*silent && !*verbose && stderrIsTerminal() {
+		progress = newCLIProgress(os.Stderr, cfg.Default.Name, cfg.Default.Model)
+		prevTrace := rt.Trace
+		rt.Trace = func(event runtime.TraceEvent) {
+			if prevTrace != nil {
+				prevTrace(event)
+			}
+			progress.trace(event)
+		}
+		progress.start()
+	}
+	rt.Stream = true
 
 	// One-shot runs create a unit session so sub-execution telemetry is
 	// durable (C4 closure). The session id is printed on stderr in-band so
@@ -147,6 +170,11 @@ func main() {
 	}
 
 	result, err := rt.Execute(context.Background(), flag.Arg(0), attachments...)
+	// Clear the progress line (if any) before any error/result output so the
+	// terminal never keeps a stale spinner frame next to the answer.
+	if progress != nil {
+		progress.stop()
+	}
 	if err != nil {
 		fmt.Fprintln(os.Stderr, err)
 		// On failure the result holds the unit's partial assistant text —
@@ -180,8 +208,15 @@ func verboseTrace(event runtime.TraceEvent) {
 				prefix, t.PromptN, t.PromptMS, t.PredictedN, t.PredictedMS, t.CacheN)
 		}
 	case "tool":
-		fmt.Fprintf(os.Stderr, "%s: tool %s, result=%dB, %s, total_tools=%d, reasoning=%s\n",
-			prefix, event.ToolName, event.ToolResultBytes, formatDuration(event.Latency), event.TotalToolCalls, event.ReasoningEffort)
+		// Surface what the call actually does (the shell command, the file a
+		// read/write/edit touches, the web_search query, the fetched URL) so
+		// verbose output is not just a tool name and a byte count.
+		detail := ""
+		if d := tui.ToolDetail(event.ToolName, event.ToolArgs, event.ToolResultLines, event.ToolResultBytes, event.ToolResultHead); d != "" {
+			detail = " (" + d + ")"
+		}
+		fmt.Fprintf(os.Stderr, "%s: tool %s%s, result=%dB, %s, total_tools=%d, reasoning=%s\n",
+			prefix, event.ToolName, detail, event.ToolResultBytes, formatDuration(event.Latency), event.TotalToolCalls, event.ReasoningEffort)
 	case "finish":
 		if event.Error != nil {
 			fmt.Fprintf(os.Stderr, "[motive] execution failed after %s: %v\n", formatDuration(event.TotalElapsed), event.Error)

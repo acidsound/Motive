@@ -17,17 +17,20 @@ import (
 // lifetime.
 func TestNewFromEnvHasNoTotalTimeout(t *testing.T) {
 	t.Setenv("MOTIVE_BASE_URL", "http://127.0.0.1:9999/v1")
+	t.Setenv("MOTIVE_HEADER_TIMEOUT", "")
 	c := NewFromEnv()
 	if c.HTTP.Timeout != 0 {
 		t.Fatalf("http.Client.Timeout = %v, want 0 (context deadline is the sole authority)", c.HTTP.Timeout)
 	}
-	// Verify ResponseHeaderTimeout is set for hung-server protection.
+	// Verify ResponseHeaderTimeout is the generous default (not the old 30s
+	// that killed long reasoning prefill), still keeping hung-server
+	// protection.
 	tr, ok := c.HTTP.Transport.(*http.Transport)
 	if !ok {
 		t.Fatal("expected *http.Transport, got different type")
 	}
-	if tr.ResponseHeaderTimeout <= 0 {
-		t.Fatal("ResponseHeaderTimeout not set; hung servers would block until context deadline")
+	if tr.ResponseHeaderTimeout != DefaultResponseHeaderTimeout {
+		t.Fatalf("ResponseHeaderTimeout = %v, want default %v", tr.ResponseHeaderTimeout, DefaultResponseHeaderTimeout)
 	}
 }
 
@@ -77,6 +80,89 @@ func TestSlowStreamCompletesWithinContextDeadline(t *testing.T) {
 	if msg.Content != "tok0tok1tok2" {
 		t.Fatalf("content = %q, want %q", msg.Content, "tok0tok1tok2")
 	}
+}
+
+// TestSlowPrefillCompletesWithDefaultHeaderTimeout verifies that a server
+// which takes a while before sending response headers (a reasoning model doing
+// long prompt processing / prefill) is not killed by the client. The old 30s
+// ResponseHeaderTimeout aborted such requests with "net/http: timeout awaiting
+// response headers"; the default must be generous enough to let prefill run.
+func TestSlowPrefillCompletesWithDefaultHeaderTimeout(t *testing.T) {
+	// Server that delays 2s before writing headers — the old 30s timeout would
+	// not fire here, but the test keeps the delay short to stay fast; what
+	// matters is that a multi-second header wait succeeds with the default
+	// client configuration.
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		select {
+		case <-time.After(2 * time.Second):
+		case <-r.Context().Done():
+			return
+		}
+		w.Header().Set("Content-Type", "application/json")
+		fmt.Fprint(w, `{"choices":[{"message":{"role":"assistant","content":"after-prefill"}}]}`)
+	}))
+	defer srv.Close()
+
+	// Default production client configuration (no total timeout, generous
+	// ResponseHeaderTimeout).
+	client := &Client{
+		BaseURL: srv.URL,
+		Model:   "test",
+		HTTP:    NewHTTPClient(),
+	}
+
+	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+	defer cancel()
+
+	msg, _, err := client.ChatStream(ctx, nil, nil, "low", nil)
+	if err != nil {
+		t.Fatalf("slow prefill failed with default client: %v", err)
+	}
+	if msg.Content != "after-prefill" {
+		t.Fatalf("content = %q, want %q", msg.Content, "after-prefill")
+	}
+}
+
+// TestResponseHeaderTimeoutConfigurable verifies the MOTIVE_HEADER_TIMEOUT
+// knob: an explicit value in seconds is honored, 0 disables the header
+// timeout entirely (context deadline becomes the only bound), and invalid
+// values fall back to the default.
+func TestResponseHeaderTimeoutConfigurable(t *testing.T) {
+	t.Run("explicit_seconds", func(t *testing.T) {
+		t.Setenv("MOTIVE_HEADER_TIMEOUT", "120")
+		tr := NewHTTPClient().Transport.(*http.Transport)
+		if tr.ResponseHeaderTimeout != 120*time.Second {
+			t.Fatalf("ResponseHeaderTimeout = %v, want 120s", tr.ResponseHeaderTimeout)
+		}
+	})
+	t.Run("zero_disables", func(t *testing.T) {
+		t.Setenv("MOTIVE_HEADER_TIMEOUT", "0")
+		tr := NewHTTPClient().Transport.(*http.Transport)
+		if tr.ResponseHeaderTimeout != 0 {
+			t.Fatalf("ResponseHeaderTimeout = %v, want 0 (disabled)", tr.ResponseHeaderTimeout)
+		}
+	})
+	t.Run("invalid_falls_back", func(t *testing.T) {
+		t.Setenv("MOTIVE_HEADER_TIMEOUT", "not-a-number")
+		tr := NewHTTPClient().Transport.(*http.Transport)
+		if tr.ResponseHeaderTimeout != DefaultResponseHeaderTimeout {
+			t.Fatalf("ResponseHeaderTimeout = %v, want default %v", tr.ResponseHeaderTimeout, DefaultResponseHeaderTimeout)
+		}
+	})
+	t.Run("negative_falls_back", func(t *testing.T) {
+		t.Setenv("MOTIVE_HEADER_TIMEOUT", "-5")
+		tr := NewHTTPClient().Transport.(*http.Transport)
+		if tr.ResponseHeaderTimeout != DefaultResponseHeaderTimeout {
+			t.Fatalf("ResponseHeaderTimeout = %v, want default %v", tr.ResponseHeaderTimeout, DefaultResponseHeaderTimeout)
+		}
+	})
+	t.Run("unset_default", func(t *testing.T) {
+		t.Setenv("MOTIVE_HEADER_TIMEOUT", "")
+		tr := NewHTTPClient().Transport.(*http.Transport)
+		if tr.ResponseHeaderTimeout != DefaultResponseHeaderTimeout {
+			t.Fatalf("ResponseHeaderTimeout = %v, want default %v", tr.ResponseHeaderTimeout, DefaultResponseHeaderTimeout)
+		}
+	})
 }
 
 // TestTotalTimeoutKillsSlowStream documents the Go http.Client behavior that
@@ -216,6 +302,7 @@ func TestResponseHeaderTimeoutProtectsAgainstHungServer(t *testing.T) {
 // protection. Because production wiring now builds the client from this exact
 // factory, this test guards the production path, not just NewFromEnv.
 func TestNewHTTPClientHasNoTotalTimeout(t *testing.T) {
+	t.Setenv("MOTIVE_HEADER_TIMEOUT", "")
 	c := NewHTTPClient()
 	if c.Timeout != 0 {
 		t.Fatalf("NewHTTPClient().Timeout = %v, want 0 (context deadline is the sole authority)", c.Timeout)
@@ -224,7 +311,9 @@ func TestNewHTTPClientHasNoTotalTimeout(t *testing.T) {
 	if !ok {
 		t.Fatalf("expected *http.Transport, got %T", c.Transport)
 	}
-	if tr.ResponseHeaderTimeout <= 0 {
-		t.Fatal("NewHTTPClient().Transport.ResponseHeaderTimeout not set; hung servers would block until context deadline")
+	// The default header timeout must be generous so long reasoning prefill
+	// is not killed; it still bounds truly hung servers.
+	if tr.ResponseHeaderTimeout != DefaultResponseHeaderTimeout {
+		t.Fatalf("NewHTTPClient().Transport.ResponseHeaderTimeout = %v, want default %v", tr.ResponseHeaderTimeout, DefaultResponseHeaderTimeout)
 	}
 }

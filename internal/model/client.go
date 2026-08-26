@@ -207,15 +207,34 @@ type Client struct {
 	HTTP            *http.Client
 }
 
+// HeaderTimeoutEnv selects the transport's ResponseHeaderTimeout in seconds.
+// The default is DefaultResponseHeaderTimeout; setting the variable to 0
+// disables the header timeout entirely (the request then lives or dies solely
+// by the runtime/context deadline, i.e. the execution budget).
+const HeaderTimeoutEnv = "MOTIVE_HEADER_TIMEOUT"
+
+// DefaultResponseHeaderTimeout is how long the client waits for the first
+// response header byte before giving up. It must be generous: a reasoning
+// model can spend minutes in prefill/prompt processing before the first token
+// (and thus before any header) arrives. The old 30s default aborted exactly
+// such valid long-prefill requests with
+// "net/http: timeout awaiting response headers".
+const DefaultResponseHeaderTimeout = 10 * time.Minute
+
 // NewHTTPClient returns the shared default HTTP client for model requests.
 //
 // It deliberately sets no total http.Client.Timeout. The runtime/request
 // context deadline is the sole authority for the full lifetime of a request,
 // including long streaming (reasoning) responses. A total client timeout would
-// kill a valid stream that is still within the execution budget. For
-// hung-server protection, ResponseHeaderTimeout is kept: a server that accepts
-// the connection but never sends response headers fails fast instead of
-// waiting for the context deadline to elapse.
+// kill a valid stream that is still within the execution budget.
+//
+// ResponseHeaderTimeout is kept as a hung-server safety net (a server that
+// accepts the connection but never sends response headers eventually fails
+// instead of blocking until the context deadline), but it defaults to a
+// generous 10 minutes and is configurable via MOTIVE_HEADER_TIMEOUT so long
+// reasoning prefill is never killed by the client. The TUI surfaces the
+// elapsed wait and offers the stop binding, so the user — not a hard timeout —
+// decides when a slow prefill has waited long enough.
 //
 // Both NewFromEnv and the production entrypoint must use this factory so the
 // timeout authority never diverges between the test-protected policy and the
@@ -223,9 +242,25 @@ type Client struct {
 func NewHTTPClient() *http.Client {
 	return &http.Client{
 		Transport: &http.Transport{
-			ResponseHeaderTimeout: 30 * time.Second,
+			ResponseHeaderTimeout: responseHeaderTimeout(),
 		},
 	}
+}
+
+// responseHeaderTimeout resolves the transport's ResponseHeaderTimeout from
+// the MOTIVE_HEADER_TIMEOUT environment variable (seconds). An unset or
+// invalid value yields DefaultResponseHeaderTimeout; an explicit 0 disables
+// the header timeout so only the context deadline bounds the request.
+func responseHeaderTimeout() time.Duration {
+	v := strings.TrimSpace(os.Getenv(HeaderTimeoutEnv))
+	if v == "" {
+		return DefaultResponseHeaderTimeout
+	}
+	n, err := strconv.Atoi(v)
+	if err != nil || n < 0 {
+		return DefaultResponseHeaderTimeout
+	}
+	return time.Duration(n) * time.Second
 }
 
 func NewFromEnv() *Client {

@@ -7,6 +7,7 @@ import (
 	"testing"
 	"time"
 
+	"charm.land/bubbles/v2/spinner"
 	tea "charm.land/bubbletea/v2"
 	"github.com/acidsound/Motive/internal/config"
 	llm "github.com/acidsound/Motive/internal/model"
@@ -1022,4 +1023,174 @@ func TestNewSessionKeybinding(t *testing.T) {
 	if m.sessionID != "def" {
 		t.Errorf("sessionID = %q, want def (key ignored while busy)", m.sessionID)
 	}
+}
+
+// TestBusyLineDistinguishesPhases verifies that the busy line labels each
+// phase distinctly — prefill, reasoning, tooling, answering — instead of a
+// generic "working…", and advertises the stop binding in every phase.
+func TestBusyLineDistinguishesPhases(t *testing.T) {
+	cases := []struct {
+		phase busyPhase
+		want  string
+	}{
+		{phasePrefill, "waiting for model response"},
+		{phaseReasoning, "reasoning"},
+		{phaseTooling, "running tool"},
+		{phaseAnswering, "answering"},
+	}
+	for _, tc := range cases {
+		m := newTestModel()
+		m.busy = true
+		m.phase = tc.phase
+		m.phaseElapsed = 90 * time.Second
+		m.width = 80
+		m.height = 20
+
+		view := m.View()
+		if !strings.Contains(view.Content, tc.want) {
+			t.Errorf("phase %v: busy view missing %q:\n%s", tc.phase, tc.want, view.Content)
+		}
+		if !strings.Contains(view.Content, "esc to cancel") {
+			t.Errorf("phase %v: busy view missing cancel hint 'esc to cancel':\n%s", tc.phase, view.Content)
+		}
+		// The generic "working…" must not appear in any distinct phase.
+		if strings.Contains(view.Content, "working…") {
+			t.Errorf("phase %v should not show 'working…':\n%s", tc.phase, view.Content)
+		}
+	}
+}
+
+// TestBusyLineShowsElapsedForNoOutputPhases verifies that the phases with no
+// visible output (prefill, reasoning) render the elapsed wait live (1m30s),
+// while tooling and answering only label the phase — their progress is
+// visible in the transcript itself.
+func TestBusyLineShowsElapsedForNoOutputPhases(t *testing.T) {
+	for _, tc := range []struct {
+		phase    busyPhase
+		withTime bool
+	}{
+		{phasePrefill, true},
+		{phaseReasoning, true},
+		{phaseTooling, false},
+		{phaseAnswering, false},
+	} {
+		m := newTestModel()
+		m.busy = true
+		m.phase = tc.phase
+		m.phaseElapsed = 90 * time.Second
+		m.width = 80
+		m.height = 20
+
+		view := m.View()
+		if got := strings.Contains(view.Content, "1m30s"); got != tc.withTime {
+			t.Errorf("phase %v shows elapsed = %v, want %v:\n%s", tc.phase, got, tc.withTime, view.Content)
+		}
+	}
+}
+
+// TestPhaseLifecycle verifies that handleTrace transitions the busy phase
+// across the trace event stream: model_start → prefill, reasoning delta →
+// reasoning, content delta → answering, tool_start → tooling, model_end →
+// working, finish → idle.
+func TestPhaseLifecycle(t *testing.T) {
+	m := newTestModel()
+
+	// model_start → prefill
+	m.handleTrace(runtime.TraceEvent{Kind: "model_start"})
+	if m.phase != phasePrefill {
+		t.Fatalf("model_start: phase = %v, want prefill", m.phase)
+	}
+	if m.phaseStart.IsZero() {
+		t.Fatal("model_start should set phaseStart")
+	}
+
+	// reasoning delta → reasoning
+	m.handleTrace(runtime.TraceEvent{Kind: "delta", Reasoning: "thinking…"})
+	if m.phase != phaseReasoning {
+		t.Fatalf("reasoning delta: phase = %v, want reasoning", m.phase)
+	}
+
+	// content delta → answering
+	m.handleTrace(runtime.TraceEvent{Kind: "delta", Text: "hello"})
+	if m.phase != phaseAnswering {
+		t.Fatalf("content delta: phase = %v, want answering", m.phase)
+	}
+
+	// next model_start → prefill again
+	m.handleTrace(runtime.TraceEvent{Kind: "model_start"})
+	if m.phase != phasePrefill {
+		t.Fatalf("second model_start: phase = %v, want prefill", m.phase)
+	}
+
+	// tool_start → tooling
+	m.handleTrace(runtime.TraceEvent{Kind: "tool_start", ToolName: "shell", ToolArgs: `{"command":"echo test"}`})
+	if m.phase != phaseTooling {
+		t.Fatalf("tool_start: phase = %v, want tooling", m.phase)
+	}
+
+	// model_end → working (server responded; tooling or finish follows)
+	m.handleTrace(runtime.TraceEvent{Kind: "model_end"})
+	if m.phase != phaseWorking {
+		t.Fatalf("model_end: phase = %v, want working", m.phase)
+	}
+
+	// model_start → finish → idle
+	m.handleTrace(runtime.TraceEvent{Kind: "model_start"})
+	m.handleTrace(runtime.TraceEvent{Kind: "finish"})
+	if m.busy {
+		t.Fatal("finish should clear busy")
+	}
+	if m.phase != phaseWorking {
+		t.Fatalf("finish: phase = %v, want working", m.phase)
+	}
+}
+
+// TestPhaseElapsedUpdatesOnTick verifies that the spinner tick refreshes
+// phaseElapsed while a no-output phase (prefill, reasoning) is running and
+// leaves it frozen once content is streaming (answering).
+func TestPhaseElapsedUpdatesOnTick(t *testing.T) {
+	t.Run("prefill", func(t *testing.T) {
+		m := newTestModel()
+		m.phase = phasePrefill
+		m.phaseStart = time.Now().Add(-45 * time.Second)
+		m.phaseElapsed = 0
+
+		// Send a spinner tick to trigger the elapsed update.
+		m2, _ := m.Update(spinner.TickMsg{Time: time.Now()})
+		m = *m2.(*model)
+
+		if m.phaseElapsed < 44*time.Second {
+			t.Fatalf("phaseElapsed = %v, want >= 44s", m.phaseElapsed)
+		}
+		// The spinner tick must not change the phase.
+		if m.phase != phasePrefill {
+			t.Fatal("spinner tick should not change the phase")
+		}
+	})
+	t.Run("reasoning", func(t *testing.T) {
+		m := newTestModel()
+		m.phase = phaseReasoning
+		m.phaseStart = time.Now().Add(-30 * time.Second)
+		m.phaseElapsed = 0
+
+		m2, _ := m.Update(spinner.TickMsg{Time: time.Now()})
+		m = *m2.(*model)
+
+		if m.phaseElapsed < 29*time.Second {
+			t.Fatalf("phaseElapsed = %v, want >= 29s", m.phaseElapsed)
+		}
+	})
+	t.Run("answering_frozen", func(t *testing.T) {
+		m := newTestModel()
+		m.phase = phaseAnswering
+		m.phaseStart = time.Now().Add(-45 * time.Second)
+		m.phaseElapsed = 0
+
+		m2, _ := m.Update(spinner.TickMsg{Time: time.Now()})
+		m = *m2.(*model)
+
+		if m.phaseElapsed != 0 {
+			t.Fatalf("phaseElapsed = %v, want 0 (no update while answering)", m.phaseElapsed)
+		}
+	})
 }

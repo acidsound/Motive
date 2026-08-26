@@ -5,6 +5,7 @@ import (
 	"testing"
 
 	"github.com/acidsound/Motive/internal/config"
+	"github.com/acidsound/Motive/internal/model"
 )
 
 // TestProductionClientHasNoTotalTimeout verifies the actual production wiring:
@@ -16,6 +17,7 @@ import (
 func TestProductionClientHasNoTotalTimeout(t *testing.T) {
 	t.Setenv("MOTIVE_TEMPERATURE", "0.6")
 	t.Setenv("MOTIVE_MAX_TOKENS", "0")
+	t.Setenv("MOTIVE_HEADER_TIMEOUT", "")
 
 	cfg := &config.Config{
 		Default: &config.Provider{
@@ -37,7 +39,9 @@ func TestProductionClientHasNoTotalTimeout(t *testing.T) {
 	if !ok {
 		t.Fatalf("expected *http.Transport, got %T", client.HTTP.Transport)
 	}
-	if tr.ResponseHeaderTimeout <= 0 {
-		t.Fatal("production client Transport.ResponseHeaderTimeout not set; hung servers would block until context deadline")
+	// The header timeout stays as a hung-server safety net, but must default
+	// to the generous value so long reasoning prefill is not killed.
+	if tr.ResponseHeaderTimeout != model.DefaultResponseHeaderTimeout {
+		t.Fatalf("production client Transport.ResponseHeaderTimeout = %v, want default %v", tr.ResponseHeaderTimeout, model.DefaultResponseHeaderTimeout)
 	}
 }
