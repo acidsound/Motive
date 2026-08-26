@@ -8,54 +8,56 @@ import (
 type Binding string
 
 type Keymap struct {
-	Quit           Binding
-	Stop           Binding
-	Run            Binding
-	Newline        Binding
-	CycleEffort    Binding
-	ModelPicker    Binding
-	CycleQueueMode Binding
-	SessionPicker  Binding
-	NewSession     Binding
-	DiffToggle     Binding
-	ToolsToggle    Binding
+	Quit            Binding
+	Stop            Binding
+	Run             Binding
+	Newline         Binding
+	CycleEffort     Binding
+	ModelPicker     Binding
+	CycleQueueMode  Binding
+	SessionPicker   Binding
+	NewSession      Binding
+	DiffToggle      Binding
+	UnitsPanel      Binding
+	ToolsToggle     Binding
 	ReasoningToggle Binding
-	AttachFile     Binding
-	PasteImage     Binding
-	ScrollUp       Binding
-	ScrollDown     Binding
-	PageUp         Binding
-	PageDown       Binding
-	HistoryUp      Binding
-	HistoryDown    Binding
-	Clear          Binding
-	Help           Binding
+	AttachFile      Binding
+	PasteImage      Binding
+	ScrollUp        Binding
+	ScrollDown      Binding
+	PageUp          Binding
+	PageDown        Binding
+	HistoryUp       Binding
+	HistoryDown     Binding
+	Clear           Binding
+	Help            Binding
 }
 
 func DefaultKeymap() Keymap {
 	return Keymap{
-		Quit:           "ctrl+c",
-		Stop:           "esc",
-		Run:            "enter",
-		Newline:        "shift+enter",
-		CycleEffort:    "alt+e",
-		ModelPicker:    "alt+m",
-		CycleQueueMode: "ctrl+\\",
-		SessionPicker:  "ctrl+r",
-		NewSession:     "alt+n",
-		DiffToggle:     "ctrl+d",
-		ToolsToggle:    "ctrl+t",
+		Quit:            "ctrl+c",
+		Stop:            "esc",
+		Run:             "enter",
+		Newline:         "shift+enter",
+		CycleEffort:     "alt+e",
+		ModelPicker:     "alt+m",
+		CycleQueueMode:  "ctrl+\\",
+		SessionPicker:   "ctrl+r",
+		NewSession:      "alt+n",
+		DiffToggle:      "ctrl+d",
+		UnitsPanel:      "alt+u",
+		ToolsToggle:     "ctrl+t",
 		ReasoningToggle: "ctrl+o",
-		AttachFile:     "alt+a",
-		PasteImage:     "ctrl+y",
-		ScrollUp:       "ctrl+k",
-		ScrollDown:     "ctrl+j",
-		PageUp:         "ctrl+shift+k",
-		PageDown:       "ctrl+shift+j",
-		HistoryUp:      "up",
-		HistoryDown:    "down",
-		Clear:          "ctrl+l",
-		Help:           "ctrl+/",
+		AttachFile:      "alt+a",
+		PasteImage:      "ctrl+y",
+		ScrollUp:        "ctrl+k",
+		ScrollDown:      "ctrl+j",
+		PageUp:          "ctrl+shift+k",
+		PageDown:        "ctrl+shift+j",
+		HistoryUp:       "up",
+		HistoryDown:     "down",
+		Clear:           "ctrl+l",
+		Help:            "ctrl+/",
 	}
 }
 
@@ -70,6 +72,7 @@ func (k *Keymap) ApplyEnv() {
 	k.SessionPicker = envBinding("MOTIVE_KEY_SESSION_PICKER", k.SessionPicker)
 	k.NewSession = envBinding("MOTIVE_KEY_NEW_SESSION", k.NewSession)
 	k.DiffToggle = envBinding("MOTIVE_KEY_DIFF_TOGGLE", k.DiffToggle)
+	k.UnitsPanel = envBinding("MOTIVE_KEY_UNITS_PANEL", k.UnitsPanel)
 	k.ToolsToggle = envBinding("MOTIVE_KEY_TOOLS_TOGGLE", k.ToolsToggle)
 	k.ReasoningToggle = envBinding("MOTIVE_KEY_REASONING_TOGGLE", k.ReasoningToggle)
 	k.AttachFile = envBinding("MOTIVE_KEY_ATTACH_FILE", k.AttachFile)
