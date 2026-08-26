@@ -18,6 +18,20 @@ builds:
     ldflags:
       - -s -w -X github.com/acidsound/Motive/internal/version.Version={{.Version}}
 
+  - id: motive-linux-arm64
+    main: ./cmd/motive
+    binary: motive
+    env:
+      - CGO_ENABLED=0
+    goos:
+      - linux
+    goarch:
+      - arm64
+    flags:
+      - -trimpath
+    ldflags:
+      - -s -w -X github.com/acidsound/Motive/internal/version.Version={{.Version}}
+
   - id: motive-darwin
     main: ./cmd/motive
     binary: motive
