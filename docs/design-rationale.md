@@ -4,7 +4,7 @@
 > Where `stable-semantics.md` records *what the stable meaning is*, this document records the *reasons* and *context* behind that meaning.
 > Classification: **[RATIONALE]** — the reasoning behind design decisions. It reflects project judgment, not source code or tests.
 >
-> 한국어 버전: [docs/design-rationale.ko.md](design-rationale.ko.md)
+> Korean version: [docs/design-rationale.ko.md](design-rationale.ko.md)
 
 ---
 
@@ -32,11 +32,7 @@ user request
   → response without tool calls → returned as final response
 ```
 
-**[SOURCE: internal/runtime/runtime.go, Execute method]**
-
-Each iteration of this loop is called a **step**.
-Steps, elapsed time, and tool-call count are bounded by an **execution budget**.
-Exceeding the budget aborts the execution.
+Each iteration of this loop is called a **step**. Steps, elapsed time, and tool-call count are bounded by an **execution budget**. Exceeding the budget interrupts the execution.
 
 ---
 
@@ -47,68 +43,21 @@ Exceeding the budget aborts the execution.
 > Every user request starts from a **fresh model context**.
 > Motive does not rely on unseen chat history to execute a request.
 
-**[SOURCE: stable-semantics.md §3; runtime.go Execute — a fresh messages slice is built on every call]**
-
 ### 3.2 The reason
 
-**The persistent world is the workspace, not the chat history.**
+**The persistent world is the workspace, not the chat history.** Files and Git state are the durable state; the model context is a disposable workbench.
 
-Agent frameworks typically treat conversation history as the persistent state.
-Motive does the opposite: **files and Git state are the real persistent state; the model context is a disposable workbench.**
+### 3.3 Session recovery
 
-```
-Traditional agents:  context = memory / summaries / history
-Motive:              context = one-shot workbench, workspace = persistent store
-```
-
-### 3.3 Advantages
-
-| Advantage | Description |
-|-----------|-------------|
-| **Reproducibility** | Same request → same initial context. No contamination from previous runs. |
-| **Determinism** | Same Git HEAD and workspace state → always the same initial context. |
-| **No context contamination** | No errors, duplicates, or contradictory instructions from prior turns. Each run starts from its own reasoning. |
-| **No hidden state** | No state the runtime cannot see. Crash and restart = completely fresh start. |
-| **Scalability** | Multiple executions can run in parallel without context conflicts. |
-
-### 3.4 Example: session recovery
-
-A session JSONL transcript is a **record, not context**.
-An interrupted run is recovered by the model itself, which reads the tail of the transcript via the `session_log` tool.
-The runtime holds no in-memory state and does not force recovery.
+A session transcript is a **record, not context**. After an interrupted run, a later execution can inspect the available evidence and decide what to do. Motive does not prescribe continuation, retry, replanning, or any other recovery strategy.
 
 ---
 
 ## 4. How context is determined
 
-### 4.1 Context compilation (ContextBlock)
+`Runtime.ContextBlock()` provides the model with the workspace location, Git state, a bounded file listing, and the applicable system guidance. The model inspects files directly with its tools when needed.
 
-`Runtime.ContextBlock()` builds the initial system message from:
-
-```
-system: You are Motive, ...
-Workspace: <workspace root path>
-Git HEAD: <current commit hash>
-Git status: <output of git status --short --branch>
-Workspace files: <file listing (capped at 6000 bytes, excluding .git and node_modules)>
-Session: <session id>  (only when running in the TUI)
-```
-
-**[SOURCE: runtime.go ContextBlock]**
-
-### 4.2 Bounded file listing
-
-The workspace file listing is capped (truncated) at 6000 bytes.
-This keeps enough information for the model to grasp "what exists" while preventing the context from exploding on huge repositories.
-
-**[SOURCE: runtime.go truncateUTF8]**
-
-### 4.3 The model inspects directly
-
-The initial context does not include the entire workspace contents.
-The model inspects directly with `read_file`, `glob`, `search_files`, and `list_files` when needed.
-
-**[SOURCE: stable-semantics.md §3]**
+The initial context deliberately does not contain the entire workspace or prior conversational history.
 
 ---
 
@@ -116,208 +65,67 @@ The model inspects directly with `read_file`, `glob`, `search_files`, and `list_
 
 ### 5.1 Deliberate simplicity
 
-Motive **intentionally** does not include:
+Motive intentionally does not include agent frameworks, plugin systems, planner layers, sub-agents, or memory managers.
 
-- **Agent frameworks** — LangChain, CrewAI, AutoGen, etc.
-- **Plugin systems**
-- **Planner layers**
-- **Sub-agents**
-- **Memory managers** — RAG, vector stores, summarization modules
+The model is responsible for reasoning and choosing how to perform the work. Motive provides the execution environment and does not decide what the model should do next.
 
-The reasoning behind this decision:
+### 5.2 Git as durable evidence
 
-1. **The model is the best planner there is.**
-   Adding a planner layer constrains the model's reasoning ability and adds dependencies.
-
-2. **More layers mean more failure points.**
-   Each layer introduces its own error modes, latency, and context contamination.
-
-3. **Motive is an execution environment, not an abstraction layer.**
-   Its purpose is to give the model direct tools over files, shell, web, and Git.
-
-### 5.2 Model-centric architecture
-
-```
-┌─────────────────────────────────────────┐
-│              MODEL (planning, reasoning)│
-│  tool call ──► execute ──► observe ──►  │
-└─────────────────────────────────────────┘
-│           MOTIVE (runtime)              │
-│  workspace | shell | web | Git         │
-└─────────────────────────────────────────┘
-```
-
-The model calls tools; Motive executes them.
-Motive does not judge "what the model should do next." That judgment belongs entirely to the model.
-
-### 5.3 Git as the backbone of persistence
-
-Workspace + Git provide:
-
-- **The reference point of the initial context** (Git HEAD)
-- **A durable record of changes** (base revision → result revision)
-- **The coordination medium between executions** (workspace + revision delta)
+Workspace + Git provide a visible reference point for an execution and a durable record of resulting changes. They can be inspected by later executions without reconstructing hidden model context.
 
 ---
 
 ## 6. Why no compaction
 
-### 6.1 The problem: compaction is not a root solution
+Compaction only raises the ceiling of a single execution; it does not make hidden context a reliable persistent state.
 
-Context trimming or compaction only **raises the ceiling of a single execution**.
-A task that exceeds one context window does not fit in a single context, no matter how well compressed.
+Motive therefore does not compact or restore prior model context. Each execution starts fresh. When an execution ends or is interrupted and further work is possible, a later execution can inspect the workspace, Git state, and available session evidence and decide for itself what to do.
 
-Motive's approach: **each execution starts fresh**. If a task is too large for one execution, the model (or the user) splits it into multiple independent executions that coordinate through the workspace and Git state.
+Motive does **not** determine whether work should be split, how it should be split, or whether the next execution should continue, discard, retry, re-plan, or ask the user.
 
-### 6.2 Concrete problems with compaction
+### 6.1 Fresh re-judgment beats stale summaries
 
-1. **Risk of exposing hidden reasoning**
-   Summarizing/compressing context risks losing or distorting the model's reasoning.
-   Motive only exposes the `[execution-state]` observation to the model;
-   reasoning content is shown separately and is never compressed.
-
-2. **Loss of reproducibility — "what was cut"**
-   Compaction is irreversible.
-   The original messages remain in the transcript, but the context the model actually saw can no longer be reconstructed.
-
-3. **Compaction is itself another problem domain**
-   Deciding which messages to keep/remove and how to summarize requires
-   model-level judgment — which conflicts with the principle that "the model judges."
-
-### 6.3 Fresh re-judgment beats stale summaries
-
-Compaction summarizes past context, so the current model sees a "summarized past."
-The fresh-context approach re-judges **freshly** from the workspace state and Git diff.
-
-> **A summary carries the summarizer's bias.
-> Fresh re-judgment reads the original evidence (workspace + diff) directly.**
+> **A summary carries the summarizer's bias. Fresh re-judgment reads the available evidence directly.**
 
 ---
 
-## 7. What makes Motive unique
+## 7. What makes Motive distinctive
 
 ### 7.1 Session = transcript, not context
 
-- **A session is a JSONL file.**
-- It only appends user/assistant/error/stopped entries.
-- It does **not** store model context. Messages from previous runs are not restored.
-- **[SOURCE: internal/session/session.go]**
-
-The session log is readable by the model:
-
-- `session_log` tool → reads the tail of the session
-- `motive` tool → Motive's own operating guidance
-
-This is the **recovery mechanism**: read from the transcript where the previous run left off and continue.
+A session is a JSONL record of observable execution events. It is not restored as hidden model context. The model may inspect the available session evidence through `session_log` when appropriate.
 
 ### 7.2 Runtime observation
 
-After tool calls, Runtime appends an `[execution-state]` message to the model context:
+During an execution, Motive reports mechanical facts such as step usage, tool usage, failures, elapsed time, and revision changes. These observations expose execution pressure without deciding the work strategy.
 
-```
-[execution-state]
-step=12/64 tools=34/128 failures=0 context=45231 peak=89210
-elapsed=2m30s effort=low rev=abc1234→def5678
-```
+### 7.3 Git revision records
 
-The observation is compressed to **3–4 lines** so the model can perceive budget pressure, failures, and context growth.
+Executions record their observable revision boundary so later work can inspect what changed.
 
-**[SOURCE: runtime.go Observation.Format]**
+### 7.4 User intervention
 
-### 7.3 Context accounting
+The user may steer an active execution or queue later input. The model still determines how that input affects the work.
 
-Before each step, Runtime estimates the context token count:
+### 7.5 Bounded execution
 
-- bytes/4 heuristic (same as the model client)
-- tracks max/peak estimates
-- records server-provided prompt_n separately
-- reports Overflow when a configured maximum is exceeded
-
-**[SOURCE: runtime.go ContextAccounting]**
-
-### 7.4 Reasoning effort
-
-Five levels: `low` / `medium` / `high` / `xhigh` / `max`.
-Default is `low`. On tool failure it temporarily escalates to `xhigh`, then returns.
-
-**[SOURCE: model/client.go normalizeEffort, runtime.go toolFailed branch]**
-
-### 7.5 Git revision records
-
-Every execution records its start-time `base_revision` and end-time `result_revision`.
-These appear in TraceEvents, session entries, and runtime observations.
-
-### 7.6 Steer / queue policy
-
-The user can intervene while a run is in progress:
-
-- **Steer**: inject a message into the current run's context
-- **Queue**: FIFO of messages processed after the current run ends
-
-**[SOURCE: runtime.go takeSteer, README.md Steer/queue policy]**
-
-### 7.7 Bounded execution
-
-| Resource | Default | Hard cap |
-|----------|---------|----------|
-| Max steps | 64 | 256 |
-| Max elapsed | 30 min | 120 min |
-| Max tool calls | 128 | 1024 |
-
-This is a safety boundary, not a model reasoning budget.
-**[SOURCE: config.go, runtime.go]**
+Steps, elapsed time, and tool calls are bounded as safety limits. These are execution boundaries, not semantic task boundaries and not a model reasoning policy.
 
 ---
 
 ## 8. Summary of strengths
 
-### 8.1 Traditional agent frameworks vs Motive
+| Aspect | Motive |
+|---|---|
+| State management | workspace + Git as durable evidence; fresh model context per execution |
+| Session persistence | transcript record, not restored context |
+| Planning | entirely model-driven |
+| Context management | no compaction or hidden history restoration |
+| Execution budget | bounded steps, time, and tool calls |
+| Execution isolation | observable workspace and Git revision boundaries |
+| Recovery | a later execution can inspect evidence and decide what to do |
+| Scaling | independent bounded executions; no runtime-prescribed decomposition strategy |
 
-| Aspect | Traditional agents (LangChain, CrewAI, etc.) | Motive |
-|--------|----------------------------------------------|--------|
-| **State management** | context history + memory modules | only workspace + Git persist |
-| **Session persistence** | conversation history saved/restored | JSONL transcript (no context) |
-| **Planning** | planner chains/layers | the model plans with its own reasoning |
-| **Tools** | plugin/toolkit ecosystems | a fixed set of 14 concrete tools |
-| **Context management** | windowing/summarization/compaction | fresh per execution (no compaction) |
-| **Execution budget** | none or separately configured | triple guard: steps/time/tool calls |
-| **Execution isolation** | usually unclear (hidden) | explicit via Git rev ranges |
-| **Recovery** | restore context from saved session | model reads `session_log` and recovers itself |
-| **Scaling** | add modules/chains/agents | bounded execution + fresh context per run |
+The central principle is unchanged:
 
-### 8.2 Motive's specific strengths
-
-1. **The model is the best planner** — full use of model reasoning with no extra layers.
-2. **Transparency** — Git revisions, session transcripts, and trace events record every execution.
-3. **Reproducible runs** — same workspace + Git HEAD → same initial context.
-4. **Safe execution boundaries** — triple step/time/tool budget protects model runs.
-5. **Failure resilience** — tool failure is information, not termination; escalation to `xhigh`; recovery via `session_log`.
-6. **Runtime observation** — the model perceives its own execution state (context pressure, budget usage, failure rate).
-7. **User intervention** — steer/queue lets the user redirect a run while it is in progress.
-
----
-
-## 9. Frontier
-
-What remains is the deferred, out-of-scope work:
-
-- **Track A — context lifecycle**: trimming/compaction for a single execution
-  remains out of scope (`stable-semantics.md` §23).
-- **Autonomous policy self-modification** (`stable-semantics.md` §20 item 5):
-  a later, separate frontier.
-
----
-
-## Appendix: design decision summary
-
-| Decision | Reason | Evidence |
-|----------|--------|----------|
-| **Stateless context** | reproducibility, contamination prevention, scalability | runtime.go Execute |
-| **Workspace + Git = persistent state** | files and revisions are the only real state | stable-semantics.md §3 |
-| **No agent framework** | the model is the best planner; extra layers are failure points | runtime.go, systemPrompt |
-| **No compaction** | fresh context per execution is the root solution | stable-semantics.md §6 |
-| **Runtime observation** | the model must perceive its own execution to optimize it | runtime.go Observation.Format |
-| **Session = transcript** | a record instead of context; re-judge rather than reconstruct | session.go |
-| **Bounded execution** | safety boundary, separate from the model's reasoning budget | runtime.go, config.go |
-| **Tool failure ≠ termination** | gives the model a chance to recover | runtime.go toolFailed |
-| **xhigh escalation** | induces focused reasoning after failure | runtime.go effort switching |
+> **Motive preserves execution boundaries and observable evidence. It does not reinterpret the user's work or prescribe the model's strategy for carrying it out.**
