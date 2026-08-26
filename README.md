@@ -35,17 +35,20 @@ commit-hash tag for CI releases).
 
 Binaries are **never built locally for distribution** — GitHub Actions builds
 them on every push to `main` via [GoReleaser](.goreleaser.yaml) and publishes
-a GitHub Release. The release (and the embedded version) is tagged with the
-short commit hash, so each commit to `main` maps to exactly one release:
+a GitHub Release. The release (and the embedded version) uses the fixed rolling
+release tag `v0.0.0`, while the release itself is titled `Latest`.
+
+GoReleaser publishes exactly one archive for each of the three supported release
+platforms:
 
 ```text
 push to main
-  -> CI tags the commit with its short hash (e.g. 5382e190)
-  -> goreleaser cross-compiles linux/darwin/windows × amd64/arm64
-  -> a GitHub Release named after the hash is published (or replaced)
+  -> CI runs tests
+  -> GoReleaser cross-compiles linux/darwin/windows (amd64)
+  -> one GitHub Release named "Latest" is replaced
 ```
 
-Install from the release assets, e.g. `motive_5382e190_linux_amd64.tar.gz`.
+Install from the release assets, e.g. `motive_0.0.0_linux_amd64.tar.gz`.
 
 ## Run
 
@@ -151,8 +154,8 @@ The TUI streams model output live with reasoning shown dimmed, renders
 lightweight markdown, and persists every turn to a JSONL session file that
 `-r` can resume. While a run is in progress:
 
-- `esc` stops the run: the in-flight request is canceled, the partial output
-  is persisted, and a `stopped` entry is recorded in the transcript.
+- `esc` stops the run: the in-flight request is canceled, the partial output is
+  persisted, and a `stopped` entry is recorded in the transcript.
 - `enter` submits to the running execution. The enter mode is cycled with
   `ctrl+\`: **steer** injects the message into the run at the next step
   boundary (after tool results, or instead of finishing); **queue** appends
@@ -177,21 +180,14 @@ esc            stop run (busy) / close help
 ctrl+c         quit
 ```
 
-`alt+m` opens the model picker: configured providers are listed as horizontal
-tabs on top, and the active tab's models below. `←`/`→` or `h`/`l` switch the
-provider tab (wrapping), `↑`/`↓` selects a model, `enter` applies it — this
-switches the live endpoint, model, and the provider's sampling settings for
-subsequent turns. Endpoints without a working `/models` endpoint fall back to
-the provider's configured model list.
-
 macOS 터미널의 "natural text editing" 프로필이 `cmd+backspace`→`ctrl+u`,
 `cmd+←`→`ctrl+a`, `cmd+→`→`ctrl+e`를 보내기 때문에, 이 세 readline 키는
 오버레이 바인딩에 쓰지 않는다(각각 alt+u, alt+a, alt+e로 대체).
 `MOTIVE_KEY_<NAME>`으로 언제든 재바인딩할 수 있다.
 
 `alt+a` opens a file browser rooted at the workspace: type a path (absolute,
-`~`, or relative) or filter the current directory by name, then `enter` to
-attach. `ctrl+y` grabs an image from the clipboard (macOS via osascript,
+`~`, or relative) or filter the current directory by name, then `enter` to attach.
+`ctrl+y` grabs an image from the clipboard (macOS via osascript,
 Linux via `wl-paste`/`xclip`); if the terminal supports inline images
 (iTerm2, kitty, ghostty, WezTerm) a thumbnail preview is shown next to the
 pending attachments above the input box. Attachments are carried into the
