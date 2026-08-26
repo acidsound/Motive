@@ -33,22 +33,77 @@ commit-hash tag for CI releases).
 
 ## Release
 
-Binaries are **never built locally for distribution** — GitHub Actions builds
-them on every push to `main` via [GoReleaser](.goreleaser.yaml) and publishes
-a GitHub Release. The release (and the embedded version) uses the fixed rolling
-release tag `v0.0.0`, while the release itself is titled `Latest`.
+Distribution binaries are built by GitHub Actions with [GoReleaser](.goreleaser.yaml). Releases are **manual**: pushing to `main` does not publish a new release. When a release is needed, run the `Release` workflow manually from GitHub Actions.
 
-GoReleaser publishes exactly one archive for each of the three supported release
-platforms:
+The project currently uses one rolling GitHub Release named `Latest` with the fixed tag `v0.0.0`. The existing release and its assets are replaced on each manual release.
 
-```text
-push to main
-  -> CI runs tests
-  -> GoReleaser cross-compiles linux/darwin/windows (amd64)
-  -> one GitHub Release named "Latest" is replaced
+Each release contains exactly these platform packages:
+
+| Asset | Platform | Architecture / notes |
+| --- | --- | --- |
+| `motive_0.0.0_windows_amd64.zip` | Windows | x86-64 (AMD64) Windows executable |
+| `motive_0.0.0_linux_amd64.tar.gz` | Linux | x86-64 (AMD64) Linux executable |
+| `motive_0.0.0_linux_arm64.tar.gz` | Linux / Android | ARM64 Linux executable. This is the package to use on ARM64 Android devices through **Termux**; Motive is built with `CGO_ENABLED=0`, so the Linux ARM64 binary can be used in the Termux environment. |
+| `motive_0.0.0_darwin_universal.tar.gz` | macOS | Universal Binary containing both Intel (x86-64) and Apple Silicon (arm64) code |
+| `checksums.txt` | — | SHA-256 checksums for the release assets |
+
+For example, on an ARM64 Android device with Termux:
+
+```bash
+pkg install tar
+# download motive_0.0.0_linux_arm64.tar.gz
+
+tar -xzf motive_0.0.0_linux_arm64.tar.gz
+./motive --tui
 ```
 
-Install from the release assets, e.g. `motive_0.0.0_linux_amd64.tar.gz`.
+The Linux ARM64 package is a Linux/Termux distribution target; it is not an Android APK and does not use the Android application package format.
+
+## First-run setup
+
+When Motive has not been configured yet, starting the TUI with `motive --tui` launches a first-run setup **before the TUI starts**. The setup creates the default provider configuration in the platform user config directory.
+
+The setup asks for three values:
+
+```text
+Motive first-run setup
+
+API Endpoint [http://127.0.0.1:8080/v1]:
+API Key (blank for none):
+Default Model [Qwen3.8-27B]:
+```
+
+### API Endpoint
+
+The endpoint is an **OpenAI-compatible API base URL**, normally ending in `/v1`. Motive sends chat completion requests to the configured OpenAI-compatible endpoint.
+
+The endpoint input can be **left blank**. In that case Motive uses the default local endpoint:
+
+```text
+http://127.0.0.1:8080/v1
+```
+
+This is useful when the model server is running locally, for example with llama.cpp's `llama-server`.
+
+For a remote or hosted provider, enter that provider's OpenAI-compatible base URL instead.
+
+### API Key
+
+The API key is **optional**. Leave it blank when the endpoint does not require authentication, such as a local model server. For hosted APIs, enter the provider's API key when required.
+
+### Default Model
+
+Enter the model ID exposed by the configured endpoint. The default is:
+
+```text
+Qwen3.8-27B
+```
+
+You can replace it with the model identifier used by your provider. The value is stored as the default model for the `default` provider.
+
+After setup, the configuration is written to the Motive user config file and subsequent runs load it automatically. Environment variables such as `MOTIVE_BASE_URL`, `MOTIVE_MODEL`, and `MOTIVE_API_KEY` override the corresponding configured values.
+
+For non-interactive usage, environment variables or a TOML config file can be used directly; Motive does not attempt the interactive setup when standard input is not a TTY.
 
 ## Run
 
@@ -76,7 +131,7 @@ exception is `MOTIVE_CONFIG`, which points at the file itself.
 
 ### Config file
 
-Default location `~/.config/motive/config.toml` (override with `MOTIVE_CONFIG`):
+Default location is the platform user-config directory with a `motive/config.toml` file (override with `MOTIVE_CONFIG`).
 
 ```toml
 # Top level
@@ -116,7 +171,7 @@ config file, the environment variables form a single "default" provider.
 
 | Variable | Config key | Default |
 | --- | --- | --- |
-| `MOTIVE_CONFIG` | — (points at the file) | `~/.config/motive/config.toml` |
+| `MOTIVE_CONFIG` | — (points at the file) | platform user-config directory + `motive/config.toml` |
 | `MOTIVE_BASE_URL` | `base_url` | `http://127.0.0.1:8080/v1` |
 | `MOTIVE_MODEL` | `model` | `Qwen3.8-27B` |
 | `MOTIVE_API_KEY` | `api_key` | — |
@@ -177,7 +232,7 @@ ctrl+shift+k / ctrl+shift+j             page up / down
 up / down      prompt history            alt+m    model picker
 ctrl+l         clear input
 esc            stop run (busy) / close help
-ctrl+c         quit
+ctrl+c          quit
 ```
 
 macOS 터미널의 "natural text editing" 프로필이 `cmd+backspace`→`ctrl+u`,
@@ -206,7 +261,7 @@ the running execution in one of two modes (cycled with `ctrl+\`):
   going in the same context.
 - **queue** appends the message to a FIFO. Nothing changes for the current
   run; each queued message is processed as a fresh turn, one at a time, after
-  the current turn ends (and after any earlier queued turns).
+  the current run ends (and after any earlier queued turns).
 
 The steer path is a bounded channel (capacity 16). Submitting while it is full
 does not block: the message silently falls back to the queue instead, so input
