@@ -51,8 +51,8 @@ Recovering from interrupted work:
 const motiveGuidePreview = "Reference Motive's own operating guidance, including how to recover from an interrupted run."
 
 type Executor struct {
-	WS *workspace.Workspace
-	SessionID string
+	WS         *workspace.Workspace
+	SessionID  string
 	SessionLog func(sessionID string, lines int) (string, error)
 
 	mu       sync.Mutex
@@ -92,72 +92,142 @@ func (e *Executor) Run(ctx context.Context, name, raw string) (string, error) {
 	}
 	str := func(key string) string { v, _ := args[key].(string); return v }
 	boolArg := func(key string) bool { v, _ := args[key].(bool); return v }
-	intArg := func(key string, fallback int) int { if v, ok := args[key].(float64); ok { return int(v) }; return fallback }
+	intArg := func(key string, fallback int) int {
+		if v, ok := args[key].(float64); ok {
+			return int(v)
+		}
+		return fallback
+	}
 
 	var result string
 	var err error
 	switch name {
-	case "read_file": result, err = e.readFile(ctx, str("path"))
-	case "write_file": if err = e.WS.WriteContext(ctx, str("path"), str("content")); err == nil { result = "written " + str("path") }
-	case "edit_file": result, err = e.WS.EditContext(ctx, str("path"), str("old_string"), str("new_string"), boolArg("replace_all"))
-	case "delete_file": if err = e.WS.DeleteContext(ctx, str("path")); err == nil { result = "deleted " + str("path") }
-	case "list_files": result, err = e.WS.ListContext(ctx, str("path"))
-	case "glob": result, err = e.WS.GlobContext(ctx, str("pattern"))
-	case "search_files": result, err = e.WS.SearchContext(ctx, str("query"))
-	case "shell": result, err = e.WS.ShellContext(ctx, str("command"))
-	case "web_search": result, err = web.Search(str("query"))
-	case "web_fetch": result, err = web.Fetch(str("url"))
-	case "git_status": result, err = e.WS.GitStatusContext(ctx)
-	case "git_diff": result, err = e.WS.GitDiffContext(ctx)
-	case "git_log": result, err = e.WS.GitLogContext(ctx, intArg("n", 10))
-	case "session_log": result, err = e.sessionLog(str("session_id"), intArg("lines", 5))
-	case "motive": result = motiveGuide
-	default: return "", fmt.Errorf("unknown tool %q", name)
+	case "read_file":
+		result, err = e.readFile(ctx, str("path"))
+	case "write_file":
+		if err = e.WS.WriteContext(ctx, str("path"), str("content")); err == nil {
+			result = "written " + str("path")
+		}
+	case "edit_file":
+		result, err = e.WS.EditContext(ctx, str("path"), str("old_string"), str("new_string"), boolArg("replace_all"))
+	case "delete_file":
+		if err = e.WS.DeleteContext(ctx, str("path")); err == nil {
+			result = "deleted " + str("path")
+		}
+	case "list_files":
+		result, err = e.WS.ListContext(ctx, str("path"))
+	case "glob":
+		result, err = e.WS.GlobContext(ctx, str("pattern"))
+	case "search_files":
+		result, err = e.WS.SearchContext(ctx, str("query"))
+	case "shell":
+		result, err = e.WS.ShellContext(ctx, str("command"))
+	case "web_search":
+		result, err = web.Search(str("query"))
+	case "web_fetch":
+		result, err = web.Fetch(str("url"))
+	case "git_status":
+		result, err = e.WS.GitStatusContext(ctx)
+	case "git_diff":
+		result, err = e.WS.GitDiffContext(ctx)
+	case "git_log":
+		result, err = e.WS.GitLogContext(ctx, intArg("n", 10))
+	case "session_log":
+		result, err = e.sessionLog(str("session_id"), intArg("lines", 5))
+	case "motive":
+		result = motiveGuide
+	default:
+		return "", fmt.Errorf("unknown tool %q", name)
 	}
-	if err != nil { result = "ERROR: " + err.Error() }
+	if err != nil {
+		result = "ERROR: " + err.Error()
+	}
 	result = addDiagnostics(result)
-	if err != nil { return Truncate(result), err }
+	if err != nil {
+		return Truncate(result), err
+	}
 	return Truncate(result), nil
 }
 
 func (e *Executor) sessionLog(id string, lines int) (string, error) {
-	if e.SessionLog == nil { return "", fmt.Errorf("no session log available (run without a session)") }
-	if id == "" { id = e.SessionID }
-	if id == "" { return "", fmt.Errorf("no active session id") }
-	if lines <= 0 { lines = 5 }
-	if lines > 20 { lines = 20 }
+	if e.SessionLog == nil {
+		return "", fmt.Errorf("no session log available (run without a session)")
+	}
+	if id == "" {
+		id = e.SessionID
+	}
+	if id == "" {
+		return "", fmt.Errorf("no active session id")
+	}
+	if lines <= 0 {
+		lines = 5
+	}
+	if lines > 20 {
+		lines = 20
+	}
 	return e.SessionLog(id, lines)
 }
 
 func (e *Executor) readFile(ctx context.Context, path string) (string, error) {
 	content, err := e.WS.ReadContext(ctx, path)
-	if err != nil { return "", err }
+	if err != nil {
+		return "", err
+	}
 	hash := sha256.Sum256([]byte(content))
 	digest := hex.EncodeToString(hash[:])
 	lines := 0
-	if content != "" { lines = strings.Count(content, "\n"); if !strings.HasSuffix(content, "\n") { lines++ } }
+	if content != "" {
+		lines = strings.Count(content, "\n")
+		if !strings.HasSuffix(content, "\n") {
+			lines++
+		}
+	}
 	e.mu.Lock()
-	if e.observed == nil { e.observed = make(map[string]string) }
+	if e.observed == nil {
+		e.observed = make(map[string]string)
+	}
 	previous, seen := e.observed[path]
 	e.observed[path] = digest
 	e.mu.Unlock()
 	status := "first_read"
-	if seen && previous == digest { status = "unchanged" } else if seen { status = "changed" }
+	if seen && previous == digest {
+		status = "unchanged"
+	} else if seen {
+		status = "changed"
+	}
 	return fmt.Sprintf("[observation]\npath=%s\nbytes=%d\nlines=%d\nsha256=%s\nstatus=%s\n\n%s", path, len(content), lines, digest, status, content), nil
 }
 
 func addDiagnostics(result string) string {
 	matches := diagnosticPattern.FindAllStringSubmatch(result, -1)
-	if len(matches) == 0 { return result }
+	if len(matches) == 0 {
+		return result
+	}
 	var b strings.Builder
-	b.WriteString(result); b.WriteString("\n\n[diagnostics]")
-	for _, match := range matches { if len(match) == 5 { b.WriteString("\nfile="); b.WriteString(strings.TrimSpace(match[1])); b.WriteString(" line="); b.WriteString(match[2]); b.WriteString(" column="); b.WriteString(match[3]); b.WriteString(" message="); b.WriteString(strings.TrimSpace(match[4])) } }
+	b.WriteString(result)
+	b.WriteString("\n\n[diagnostics]")
+	for _, match := range matches {
+		if len(match) == 5 {
+			b.WriteString("\nfile=")
+			b.WriteString(strings.TrimSpace(match[1]))
+			b.WriteString(" line=")
+			b.WriteString(match[2])
+			b.WriteString(" column=")
+			b.WriteString(match[3])
+			b.WriteString(" message=")
+			b.WriteString(strings.TrimSpace(match[4]))
+		}
+	}
 	return b.String()
 }
 
 func Truncate(s string) string {
-	if len(s) <= MaxToolResultBytes { return s }
+	if len(s) <= MaxToolResultBytes {
+		return s
+	}
 	cut := MaxToolResultBytes
-	for cut > 0 && !utf8.RuneStart(s[cut]) { cut-- }
+	for cut > 0 && !utf8.RuneStart(s[cut]) {
+		cut--
+	}
 	return s[:cut] + fmt.Sprintf("\n\n[tool result truncated: %d bytes total, showing first %d bytes]", len(s), cut)
 }

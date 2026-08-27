@@ -232,6 +232,20 @@ func hasMediaParts(messages []model.Message) bool {
 	return false
 }
 
+// missingToolCallIDs reports whether any tool call lacks a server-assigned id.
+// Some OpenAI-compatible gateways (MiniMax adapters are a known offender)
+// stream tool_calls deltas without the id field; the follow-up tool message
+// would then carry an empty tool_call_id and the provider rejects the request
+// with "tool call id is invalid". A non-streaming retry recovers the ids.
+func missingToolCallIDs(calls []model.ToolCall) bool {
+	for _, c := range calls {
+		if strings.TrimSpace(c.ID) == "" {
+			return true
+		}
+	}
+	return false
+}
+
 // New builds a runtime from the resolved configuration. The workspace root and
 // the execution budget are read from cfg (already resolved: environment wins
 // over the config file, then the built-in default, capped at the allowed max).
@@ -378,6 +392,15 @@ func (r *Runtime) Execute(ctx context.Context, request string, attachments ...mo
 			msg, stats, err = r.Model.ChatStream(ctx, messages, toolDefs, effort, func(delta model.StreamDelta) {
 				r.emit(TraceEvent{Kind: "delta", Step: stepNumber, MaxSteps: budget.MaxSteps, MessageCount: len(messages), TotalToolCalls: obs.ToolCalls, ReasoningEffort: effort, TotalElapsed: time.Since(started), Text: delta.Content, Reasoning: delta.Reasoning})
 			})
+			// Some OpenAI-compatible gateways (MiniMax adapters are a known
+			// offender) stream tool_calls deltas without the id field, so the
+			// follow-up tool message would carry an empty tool_call_id and the
+			// provider rejects it with "tool call id is invalid". Retry the
+			// same request non-streaming, where the response carries the ids.
+			if err == nil && len(msg.ToolCalls) > 0 && missingToolCallIDs(msg.ToolCalls) {
+				r.emit(TraceEvent{Kind: "model_start", Step: stepNumber, MaxSteps: budget.MaxSteps, MessageCount: len(messages), TotalToolCalls: obs.ToolCalls, ContextTokens: ctxTokens, PeakContextTokens: ctxAcc.PeakRequest, MaxContextTokens: r.MaxContextTokens, ReasoningEffort: effort, TotalElapsed: time.Since(started), Text: "[retry non-streaming: tool calls streamed without ids]"})
+				msg, stats, err = r.Model.ChatWithEffort(ctx, messages, toolDefs, effort)
+			}
 		} else {
 			msg, stats, err = r.Model.ChatWithEffort(ctx, messages, toolDefs, effort)
 		}
@@ -471,8 +494,11 @@ func (r *Runtime) Execute(ctx context.Context, request string, attachments ...mo
 		messages = append(messages, model.Message{Role: "system", Content: obs.context(stepNumber, budget, started, effort, baseRevision, r.WS.GitHEAD()) + "\n\n" + r.Observ.Context()})
 
 		// Observe the completed turn and adapt the next turn. Normal execution
-		// stays cheap; recovery after a tool failure gets one xhigh turn.
-		if toolFailed {
+		// stays cheap; recovery after a tool failure gets one xhigh turn —
+		// unless reasoning effort is disabled (effort off), in which case the
+		// endpoint must not receive any reasoning_effort parameter at all, so
+		// the escalation is skipped and effort stays off.
+		if toolFailed && effort != "off" {
 			effort = "xhigh"
 		} else {
 			effort = r.Model.GetReasoningEffort()

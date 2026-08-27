@@ -1046,7 +1046,7 @@ func (m *model) lastAssistantActive() bool {
 
 func (m *model) cycleEffort() {
 	current := m.rt.Model.GetReasoningEffort()
-	order := []string{"low", "medium", "high", "xhigh", "max"}
+	order := []string{"low", "medium", "high", "xhigh", "max", "off"}
 	next := order[0]
 	for i, lvl := range order {
 		if lvl == current {
@@ -1756,7 +1756,13 @@ func (m model) statusLine() string {
 	}
 	if m.rt != nil && m.rt.Model != nil {
 		b.WriteString(m.rt.Model.Model)
-		b.WriteString(" · " + styleEffort.Render("effort "+m.rt.Model.GetReasoningEffort()))
+		if m.rt.Model.GetReasoningEffort() == "off" {
+			// Effort is disabled for endpoints that reject reasoning_effort:
+			// render the state dimmed instead of the active color.
+			b.WriteString(" · " + styleDim.Render("effort off"))
+		} else {
+			b.WriteString(" · " + styleEffort.Render("effort "+m.rt.Model.GetReasoningEffort()))
+		}
 	}
 	if steps := m.stepsCapacity(); steps > 0 {
 		b.WriteString(fmt.Sprintf(" · %d steps", steps))

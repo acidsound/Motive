@@ -1,0 +1,32 @@
+#!/bin/sh
+# Pre-commit hook: enforce gofmt on staged Go files.
+# Mirrors the "Verify formatting" step in .github/workflows/ci.yml so the
+# same rule is enforced locally before the push, not just in CI after it.
+
+set -u
+
+# Only consider Go files that are actually being committed (added/copied/modified).
+staged="$(git diff --cached --name-only --diff-filter=ACM | grep -E '\.go$' || true)"
+
+if [ -n "$staged" ]; then
+  # gofmt -l prints a file's path only when it is NOT gofmt-clean.
+  unformatted="$(
+    printf '%s\n' "$staged" | while IFS= read -r f; do
+      [ -z "$f" ] && continue
+      gofmt -l "$f"
+    done
+  )"
+  if [ -n "$unformatted" ]; then
+    {
+      echo "gofmt: unformatted staged Go files (commit blocked):"
+      printf '%s\n' "$unformatted"
+      echo ""
+      echo "Fix with:  gofmt -w <file>   (or: gofmt -w .)"
+      echo "Re-stage:  git add <file>"
+      echo "Bypass in an emergency: git commit --no-verify"
+    } >&2
+    exit 1
+  fi
+fi
+
+exit 0

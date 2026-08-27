@@ -206,7 +206,7 @@ base_url = "http://127.0.0.1:8787/v1"
 model = "qwen3.8-27b"
 models = ["deepseek-v4-pro", "gemma-4-31b"]
 api_key = ""                   # optional
-reasoning_effort = "medium"    # low | medium | high | xhigh | max
+reasoning_effort = "medium"    # low | medium | high | xhigh | max | off (off omits the parameter entirely)
 temperature = 0.6              # sampling temperature; omit for the 0.6 default
 max_tokens = 0                 # response cap; 0 = no limit
 ```
@@ -236,6 +236,12 @@ config file, the environment variables form a single "default" provider.
 
 `OPENAI_BASE_URL`, `OPENAI_MODEL`, and `OPENAI_API_KEY` are accepted as
 fallbacks for the endpoint settings when no `MOTIVE_*` value is set.
+
+Set `MOTIVE_REASONING_EFFORT=off` (or `reasoning_effort = "off"` in the config
+file) to disable the reasoning-effort parameter entirely. The request then
+omits both the top-level `reasoning_effort` field and the
+`chat_template_kwargs` entry, which some endpoints reject when they serve
+models that have no reasoning-effort knob. `"none"` is an alias for `"off"`.
 
 ### Session storage
 
@@ -303,6 +309,11 @@ ctrl+l         clear input
 esc            stop run (busy) / close help
 ctrl+c         quit
 ```
+
+The `alt+e` effort cycle runs `low → medium → high → xhigh → max → off` and
+wraps back to `low`. `off` is the disabled state: requests then omit the
+`reasoning_effort` parameter entirely, for endpoints that reject it. The
+status bar renders `effort off` dimmed to distinguish it from an active level.
 
 On macOS, the terminal profile's "natural text editing" behavior maps
 `cmd+backspace` to `ctrl+u`, `cmd+left` to `ctrl+a`, and `cmd+right` to

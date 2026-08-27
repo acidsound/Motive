@@ -150,9 +150,10 @@ func clearBehaviorEnv(t *testing.T) {
 }
 
 func TestLoadReasoningEffortFullVocabulary(t *testing.T) {
-	// The 5-level vocabulary must pass through both the env and the config
-	// file unchanged; only unknown values fall back to low.
-	for _, lvl := range []string{"low", "medium", "high", "xhigh", "max"} {
+	// The 5-level vocabulary plus the "off" sentinel must pass through both
+	// the env and the config file unchanged; only unknown values fall back
+	// to low.
+	for _, lvl := range []string{"low", "medium", "high", "xhigh", "max", "off"} {
 		t.Run("env_"+lvl, func(t *testing.T) {
 			clearBehaviorEnv(t)
 			t.Setenv("MOTIVE_CONFIG", filepath.Join(t.TempDir(), "missing.toml"))
@@ -180,6 +181,35 @@ reasoning_effort = "`+lvl+`"
 			}
 			if cfg.Default.ReasoningEffort != lvl {
 				t.Errorf("file effort %q = %q, want passthrough", lvl, cfg.Default.ReasoningEffort)
+			}
+		})
+	}
+}
+
+// TestLoadReasoningEffortNoneAlias verifies "none" is accepted as an alias
+// for "off" (the disabled sentinel), in both the env and the config file.
+func TestLoadReasoningEffortNoneAlias(t *testing.T) {
+	for _, src := range []string{"env", "file"} {
+		t.Run(src, func(t *testing.T) {
+			clearBehaviorEnv(t)
+			if src == "env" {
+				t.Setenv("MOTIVE_CONFIG", filepath.Join(t.TempDir(), "missing.toml"))
+				t.Setenv("MOTIVE_REASONING_EFFORT", "none")
+			} else {
+				t.Setenv("MOTIVE_CONFIG", writeTempConfig(t, `
+[[providers]]
+name = "local"
+base_url = "http://127.0.0.1:8080/v1"
+model = "m"
+reasoning_effort = "none"
+`))
+			}
+			cfg, err := Load()
+			if err != nil {
+				t.Fatal(err)
+			}
+			if cfg.Default.ReasoningEffort != "off" {
+				t.Errorf("%s effort none = %q, want off", src, cfg.Default.ReasoningEffort)
 			}
 		})
 	}

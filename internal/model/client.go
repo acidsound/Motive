@@ -34,6 +34,12 @@ type Message struct {
 // the multimodal content array when ContentParts is set (attachments), the
 // plain string otherwise (including the empty string, matching the previous
 // behavior that tool messages always carry an explicit content key).
+//
+// Per the OpenAI spec, assistant messages that carry tool_calls must have
+// content: null (not an empty string).  Strict providers (MiniMax, Moonshot,
+// DeepSeek, etc.) reject "" and return "tool call id is invalid" because the
+// tool_calls are not properly registered.  When the message has tool_calls and
+// empty content we emit null so the follow-up request is accepted.
 func (m Message) MarshalJSON() ([]byte, error) {
 	type alias Message
 	aux := struct {
@@ -49,6 +55,11 @@ func (m Message) MarshalJSON() ([]byte, error) {
 			return nil, err
 		}
 		aux.Content = parts
+	} else if len(m.ToolCalls) > 0 && m.Content == "" {
+		// Per OpenAI spec: assistant messages with tool_calls must have
+		// content: null.  Strict providers reject empty-string content and
+		// then report the tool_call_id as invalid on the follow-up request.
+		aux.Content = json.RawMessage("null")
 	} else {
 		content, err := json.Marshal(m.Content)
 		if err != nil {
@@ -275,18 +286,44 @@ func NewFromEnv() *Client {
 	}
 }
 
-// normalizeEffort accepts the full standard reasoning-effort vocabulary and
-// passes recognized values straight through, letting the provider reject any
-// level it does not actually support. Only unknown or empty values fall back
-// to the Motive default of "low".
+// normalizeEffort accepts the full standard reasoning-effort vocabulary plus
+// the "off" sentinel and passes recognized values straight through, letting
+// the provider reject any level it does not actually support. Only unknown or
+// empty values fall back to the Motive default of "low".
+//
+// "off" (alias "none") disables reasoning effort entirely: the request omits
+// both the top-level reasoning_effort field and the chat_template_kwargs
+// entry, for endpoints that reject unknown parameters or serve models that
+// have no reasoning-effort knob.
 func normalizeEffort(v string) string {
 	n := strings.ToLower(strings.TrimSpace(v))
 	switch n {
 	case "low", "medium", "high", "xhigh", "max":
 		return n
+	case "off", "none":
+		return "off"
 	default:
 		return "low"
 	}
+}
+
+// effortIfEnabled returns the normalized effort for the request, or "" when
+// effort is off. An empty string is omitted from the JSON body via omitempty,
+// so endpoints that reject reasoning_effort never see it.
+func effortIfEnabled(effort string) string {
+	if effort == "off" {
+		return ""
+	}
+	return effort
+}
+
+// kwargsIfEnabled returns the chat-template kwargs carrying the effort, or
+// nil when effort is off (the map is then omitted from the JSON body).
+func kwargsIfEnabled(effort string) map[string]string {
+	if effort == "off" {
+		return nil
+	}
+	return map[string]string{"reasoning_effort": effort}
 }
 
 func (c *Client) SetReasoningEffort(effort string) {
@@ -401,6 +438,20 @@ func env(key, fallback string) string {
 	return fallback
 }
 
+// annotateToolCallError adds a diagnosis hint when a provider rejects a
+// follow-up tool message. MiniMax and other strict OpenAI-compatible providers
+// return "tool call id is invalid" when the preceding assistant message was
+// not accepted (most commonly because its content was "" instead of null, or
+// because a gateway streamed tool calls without ids). Pointing at the cause
+// turns an opaque 400 into an actionable one.
+func annotateToolCallError(msg string) string {
+	lower := strings.ToLower(msg)
+	if strings.Contains(lower, "tool call id is invalid") || (strings.Contains(lower, "tool_call_id") && strings.Contains(lower, "invalid")) {
+		return msg + " (provider rejected the tool_call_id: assistant tool-call messages must carry content:null and a real tool-call id. Motive now emits content:null for tool-call turns and retries non-streaming when streamed ids are missing — update and retry)"
+	}
+	return msg
+}
+
 func envFloat(key string, fallback float64) float64 {
 	v := strings.TrimSpace(os.Getenv(key))
 	if v == "" {
@@ -442,8 +493,8 @@ func (c *Client) ChatWithEffort(ctx context.Context, messages []Message, tools [
 		ToolChoice:         choice,
 		Temperature:        c.Temperature,
 		MaxTokens:          c.MaxTokens,
-		ReasoningEffort:    effort,
-		ChatTemplateKwargs: map[string]string{"reasoning_effort": effort},
+		ReasoningEffort:    effortIfEnabled(effort),
+		ChatTemplateKwargs: kwargsIfEnabled(effort),
 	})
 	if err != nil {
 		return Message{}, ChatStats{}, fmt.Errorf("marshal request: %w", err)
@@ -473,7 +524,7 @@ func (c *Client) ChatWithEffort(ctx context.Context, messages []Message, tools [
 	}
 	stats.ResponseBytes = len(data)
 	if resp.StatusCode < 200 || resp.StatusCode >= 300 {
-		return Message{}, stats, fmt.Errorf("model returned %s: %s", resp.Status, strings.TrimSpace(string(data)))
+		return Message{}, stats, fmt.Errorf("model returned %s: %s", resp.Status, annotateToolCallError(strings.TrimSpace(string(data))))
 	}
 	var out response
 	if err := json.Unmarshal(data, &out); err != nil {
@@ -508,8 +559,8 @@ func (c *Client) ChatStream(ctx context.Context, messages []Message, tools []Too
 		ToolChoice:         choice,
 		Temperature:        c.Temperature,
 		MaxTokens:          c.MaxTokens,
-		ReasoningEffort:    effort,
-		ChatTemplateKwargs: map[string]string{"reasoning_effort": effort},
+		ReasoningEffort:    effortIfEnabled(effort),
+		ChatTemplateKwargs: kwargsIfEnabled(effort),
 		Stream:             true,
 	})
 	if err != nil {
@@ -537,7 +588,7 @@ func (c *Client) ChatStream(ctx context.Context, messages []Message, tools []Too
 	if resp.StatusCode < 200 || resp.StatusCode >= 300 {
 		data, _ := io.ReadAll(io.LimitReader(resp.Body, 1<<20))
 		stats.ResponseBytes = len(data)
-		return Message{}, stats, fmt.Errorf("model returned %s: %s", resp.Status, strings.TrimSpace(string(data)))
+		return Message{}, stats, fmt.Errorf("model returned %s: %s", resp.Status, annotateToolCallError(strings.TrimSpace(string(data))))
 	}
 
 	msg, stats, err := c.consumeStream(resp.Body, stats, onDelta)

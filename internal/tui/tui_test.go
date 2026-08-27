@@ -114,7 +114,9 @@ func TestRenderTranscriptKeepsNewestAtBottom(t *testing.T) {
 func TestCycleEffort(t *testing.T) {
 	m := newTestModel()
 	m.rt.Model = &llm.Client{ReasoningEffort: "low"}
-	steps := []string{"medium", "high", "xhigh", "max", "low"}
+	// The cycle includes "off" (the disabled sentinel for endpoints that
+	// reject reasoning_effort) after "max", then wraps back to "low".
+	steps := []string{"medium", "high", "xhigh", "max", "off", "low"}
 	for _, want := range steps {
 		m.cycleEffort()
 		if got := m.rt.Model.GetReasoningEffort(); got != want {

@@ -531,3 +531,152 @@ func TestExecuteBudgetExceededPreservesTrace(t *testing.T) {
 		t.Fatalf("partial text on error = %q, want forward intent preserved", out)
 	}
 }
+
+// TestExecuteEffortOffNeverSendsReasoningEffort verifies the "effort off"
+// mode end-to-end: with reasoning effort disabled, no request — including the
+// retry after a tool failure, which would normally escalate to xhigh — may
+// carry a reasoning_effort parameter. This is the compatibility mode for
+// endpoints that reject unknown fields or serve models without a reasoning
+// knob.
+func TestExecuteEffortOffNeverSendsReasoningEffort(t *testing.T) {
+	var bodies []string
+	callCount := 0
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		callCount++
+		body, _ := io.ReadAll(r.Body)
+		bodies = append(bodies, string(body))
+		w.Header().Set("Content-Type", "application/json")
+		if callCount == 1 {
+			// First call: a tool call that fails (file does not exist).
+			fmt.Fprint(w, `{"choices":[{"message":{"role":"assistant","content":"","tool_calls":[{"id":"call_1","type":"function","function":{"name":"read_file","arguments":"{\"path\":\"nope.md\"}"}}]}}]}`)
+		} else {
+			// Second call: final response. With effort off the tool failure
+			// must NOT escalate to xhigh.
+			fmt.Fprint(w, `{"choices":[{"message":{"role":"assistant","content":"recovered"}}]}`)
+		}
+	}))
+	defer server.Close()
+
+	ws := workspace.New(t.TempDir())
+	rt := &Runtime{
+		Model: &model.Client{
+			BaseURL:         server.URL,
+			Model:           "test",
+			ReasoningEffort: "off",
+			HTTP:            server.Client(),
+		},
+		WS:       ws,
+		Exec:     &tools.Executor{WS: ws},
+		MaxSteps: 4,
+		Budget:   ExecutionBudget{MaxSteps: 4, MaxDuration: time.Minute, MaxToolCalls: 8},
+	}
+
+	out, err := rt.Execute(context.Background(), "read the missing file")
+	if err != nil {
+		t.Fatalf("Execute: %v", err)
+	}
+	if out != "recovered" {
+		t.Fatalf("output = %q, want recovered", out)
+	}
+	if callCount != 2 {
+		t.Fatalf("model calls = %d, want 2 (tool call + final)", callCount)
+	}
+	for i, body := range bodies {
+		// Match the JSON key (with the colon) so the observation text inside
+		// the messages ("current_reasoning_effort=off") does not false-positive.
+		if strings.Contains(body, `"reasoning_effort":`) {
+			t.Errorf("request %d carries reasoning_effort while effort is off:\n%s", i+1, body)
+		}
+	}
+}
+
+func TestMissingToolCallIDs(t *testing.T) {
+	mk := func(ids ...string) []model.ToolCall {
+		var out []model.ToolCall
+		for _, id := range ids {
+			out = append(out, model.ToolCall{ID: id, Type: "function"})
+		}
+		return out
+	}
+	if missingToolCallIDs(nil) {
+		t.Fatal("nil tool calls reported as missing ids")
+	}
+	if missingToolCallIDs(mk("call_1", "call_2")) {
+		t.Fatal("complete ids reported as missing")
+	}
+	if !missingToolCallIDs(mk("call_1", "")) {
+		t.Fatal("empty id not detected")
+	}
+	if !missingToolCallIDs(mk("  ")) {
+		t.Fatal("whitespace id not detected")
+	}
+}
+
+// TestExecuteRetriesNonStreamingWhenStreamedToolCallsLackIDs reproduces the
+// MiniMax/gateway failure: the streaming SSE delivers tool_calls deltas with
+// no id field, so the follow-up tool message would carry an empty tool_call_id
+// and the provider would reject it ("tool call id is invalid"). The runtime
+// must retry the same request non-streaming, where the response carries ids.
+func TestExecuteRetriesNonStreamingWhenStreamedToolCallsLackIDs(t *testing.T) {
+	callCount := 0
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		callCount++
+		body, _ := io.ReadAll(r.Body)
+		isStream := strings.Contains(string(body), `"stream":true`)
+		w.Header().Set("Content-Type", "application/json")
+		switch {
+		case callCount == 1 && isStream:
+			// First call: stream a tool call WITHOUT an id (gateway bug).
+			lines := strings.Join([]string{
+				`data: {"choices":[{"delta":{"role":"assistant","tool_calls":[{"index":0,"type":"function","function":{"name":"read_file","arguments":"{\"pa"}}]}}]}`,
+				``,
+				`data: {"choices":[{"delta":{"tool_calls":[{"index":0,"function":{"arguments":"th\":\"README.md\"}"}}]}}]}`,
+				``,
+				`data: {"choices":[{"delta":{},"finish_reason":"tool_calls"}]}`,
+				``,
+				`data: [DONE]`,
+				``,
+			}, "\n")
+			w.Header().Set("Content-Type", "text/event-stream")
+			fmt.Fprint(w, lines)
+		case callCount == 2 && !isStream:
+			// Second call: the non-streaming retry returns the id.
+			fmt.Fprint(w, `{"choices":[{"message":{"role":"assistant","content":"","tool_calls":[{"id":"call_9","type":"function","function":{"name":"read_file","arguments":"{\"path\":\"README.md\"}"}}]}}]}`)
+		default:
+			fmt.Fprint(w, `{"choices":[{"message":{"role":"assistant","content":"recovered"}}]}`)
+		}
+	}))
+	defer server.Close()
+
+	dir := t.TempDir()
+	ws := workspace.New(dir)
+	if err := ws.Write("README.md", "test file\n"); err != nil {
+		t.Fatalf("Write: %v", err)
+	}
+
+	rt := &Runtime{
+		Model: &model.Client{
+			BaseURL:         server.URL,
+			Model:           "test",
+			ReasoningEffort: "low",
+			HTTP:            server.Client(),
+		},
+		WS:       ws,
+		Exec:     &tools.Executor{WS: ws},
+		MaxSteps: 4,
+		Budget:   ExecutionBudget{MaxSteps: 4, MaxDuration: time.Minute, MaxToolCalls: 8},
+		Stream:   true,
+	}
+
+	out, err := rt.Execute(context.Background(), "read the readme")
+	if err != nil {
+		t.Fatalf("Execute: %v", err)
+	}
+	if out != "recovered" {
+		t.Fatalf("output = %q, want recovered", out)
+	}
+	// 1 stream + 1 non-streaming retry + 1 final = 3 calls.
+	if callCount != 3 {
+		t.Fatalf("model calls = %d, want 3 (stream, retry, final)", callCount)
+	}
+}

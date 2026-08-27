@@ -147,13 +147,15 @@ The active session id is passed into the model context each turn, and the `sessi
 
 Reasoning effort is a runtime model parameter. Motive recognizes `low`, `medium`, `high`, `xhigh`, and `max` and passes a recognized value through to the model server rather than silently substituting another recognized level. Unknown or empty values fall back to `low`. **[SOURCE]**
 
+Motive also recognizes `off` (alias `none`), which disables reasoning effort entirely: it is not passed to the model server, and the request omits the `reasoning_effort` parameter. This is the compatibility mode for endpoints that reject unknown fields or serve models without a reasoning-effort knob. **[SOURCE][TEST]**
+
 The current Motive default is `low`. **[DECISION]**
 
-The configured effort is sent to the model request both as `reasoning_effort` and as the `reasoning_effort` chat-template argument. **[SOURCE]**
+When effort is enabled, the configured effort is sent to the model request both as `reasoning_effort` and as the `reasoning_effort` chat-template argument. When effort is `off`, both are omitted from the request. **[SOURCE][TEST]**
 
-During execution, the runtime may temporarily escalate to `xhigh` after a tool failure, then restore the configured default effort on a subsequent turn. **[SOURCE][DECISION]**
+During execution, the runtime may temporarily escalate to `xhigh` after a tool failure, then restore the configured default effort on a subsequent turn. This escalation is skipped entirely when effort is `off`, so an endpoint that rejects `reasoning_effort` never receives it even after a failure. **[SOURCE][TEST]**
 
-The TUI exposes reasoning-effort control and displays the active effort in the status area. **[SOURCE]**
+The TUI exposes reasoning-effort control — including the `off` state — and displays the active effort in the status area (`effort off` is rendered dimmed to distinguish it from an active level). **[SOURCE][TEST]**
 
 For the currently used llama-server/Qwen setup, `low`, `medium`, and `xhigh` have been exercised in the benchmark phase. Support and behavior of `high` and `max` on that provider/model combination are **[UNKNOWN]** and must not be assumed from Motive's normalized vocabulary.
 
@@ -191,7 +193,7 @@ A tool failure does not by itself terminate the execution; the error is returned
 
 An execution interrupted by a model/network failure terminates with an error and carries no in-memory continuation state. Recovery is driven by the model itself: a later run in the same session can read the persisted transcript through the `session_log` tool and continue where the interrupted run left off. **[SOURCE][DECISION]**
 
-A tool failure currently causes the next model turn to use `xhigh` reasoning effort. **[SOURCE]**
+A tool failure currently causes the next model turn to use `xhigh` reasoning effort, unless effort is `off` (the disabled mode), in which case it stays `off` and no `reasoning_effort` is ever sent. **[SOURCE]**
 
 The configured default is restored after the recovery turn. **[SOURCE]**
 
@@ -283,9 +285,9 @@ Reasoning effort can be changed interactively rather than being restricted to an
 4. **Concrete tool loop:** tool calls and their results form the iterative execution mechanism. **[SOURCE]**
 5. **Bounded execution:** an execution cannot exceed its configured step, duration, or tool-call budget. **[SOURCE]**
 6. **Observable revision state:** execution records its base and resulting Git revisions. **[SOURCE]**
-7. **Explicit reasoning configuration:** reasoning effort is a runtime parameter with `low` as the current default and a normalized Motive vocabulary of `low/medium/high/xhigh/max`, passed through to the provider. **[SOURCE][DECISION]**
+7. **Explicit reasoning configuration:** reasoning effort is a runtime parameter with `low` as the current default and a normalized Motive vocabulary of `low/medium/high/xhigh/max`, plus the `off` (alias `none`) disabled sentinel that omits the parameter from requests; recognized values are passed through to the provider. **[SOURCE][DECISION]**
 8. **Provider capability is separate:** Motive's normalized effort vocabulary does not imply that every provider/model supports every level. **[DECISION]**
-9. **Recovery escalation is temporary:** failure-driven `xhigh` escalation does not replace the configured default effort. **[SOURCE]**
+9. **Recovery escalation is temporary:** failure-driven `xhigh` escalation does not replace the configured default effort, and is skipped entirely when effort is `off` (so a disabled endpoint never receives `reasoning_effort`). **[SOURCE]**
 10. **Telemetry is observational:** execution telemetry describes what happened and is not itself evidence that autonomous adaptation is implemented. **[DECISION]**
 11. **Runtime self-observation is bounded:** model-visible observations contain execution metadata, not hidden reasoning content. **[DECISION]**
 12. **Self-modification is model-directed:** workspace changes occur through the existing tools and are not silently committed or pushed by the runtime. **[SOURCE][DECISION]**
