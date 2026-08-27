@@ -3,3 +3,4 @@
 *.local
 motive.tasks/
 dist/
+/motive
