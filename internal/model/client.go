@@ -128,6 +128,10 @@ type ToolProperty struct {
 	Description string `json:"description,omitempty"`
 }
 
+type streamOptions struct {
+	IncludeUsage bool `json:"include_usage,omitempty"`
+}
+
 type request struct {
 	Model              string            `json:"model"`
 	Messages           []Message         `json:"messages"`
@@ -138,6 +142,13 @@ type request struct {
 	ReasoningEffort    string            `json:"reasoning_effort,omitempty"`
 	ChatTemplateKwargs map[string]string `json:"chat_template_kwargs,omitempty"`
 	Stream             bool              `json:"stream,omitempty"`
+	StreamOptions      *streamOptions    `json:"stream_options,omitempty"`
+}
+
+type UsageInfo struct {
+	PromptTokens     int `json:"prompt_tokens"`
+	CompletionTokens int `json:"completion_tokens"`
+	TotalTokens      int `json:"total_tokens"`
 }
 
 type response struct {
@@ -145,6 +156,7 @@ type response struct {
 		Message Message `json:"message"`
 	} `json:"choices"`
 	Timings *ServerTimings `json:"timings,omitempty"`
+	Usage   *UsageInfo     `json:"usage,omitempty"`
 }
 
 // StreamDelta carries one incremental chunk of a streamed chat completion.
@@ -174,6 +186,7 @@ type streamChunk struct {
 		FinishReason string `json:"finish_reason"`
 	} `json:"choices"`
 	Timings *ServerTimings `json:"timings,omitempty"`
+	Usage   *UsageInfo     `json:"usage,omitempty"`
 }
 
 type streamToolCallDelta struct {
@@ -546,6 +559,14 @@ func (c *Client) ChatWithEffort(ctx context.Context, messages []Message, tools [
 		return Message{}, stats, fmt.Errorf("model returned no choices")
 	}
 	stats.ServerTimings = out.Timings
+	if stats.ServerTimings == nil && out.Usage != nil && out.Usage.CompletionTokens > 0 && stats.Latency > 0 {
+		stats.ServerTimings = &ServerTimings{
+			PredictedN:         out.Usage.CompletionTokens,
+			PredictedMS:        float64(stats.Latency.Milliseconds()),
+			PredictedPerSecond: float64(out.Usage.CompletionTokens) / stats.Latency.Seconds(),
+			PromptN:            out.Usage.PromptTokens,
+		}
+	}
 	msg := out.Choices[0].Message
 	if msg.Role == "" {
 		msg.Role = "assistant"
@@ -574,6 +595,7 @@ func (c *Client) ChatStream(ctx context.Context, messages []Message, tools []Too
 		ReasoningEffort:    effortIfEnabled(effort),
 		ChatTemplateKwargs: kwargsIfEnabled(effort),
 		Stream:             true,
+		StreamOptions:      &streamOptions{IncludeUsage: true},
 	})
 	if err != nil {
 		return Message{}, ChatStats{}, fmt.Errorf("marshal request: %w", err)
@@ -615,6 +637,12 @@ func (c *Client) consumeStream(body io.Reader, stats ChatStats, onDelta func(Str
 	reader := bufio.NewReader(body)
 	first := true
 	sawDone := false
+	var firstTokenTime time.Time
+	var lastTokenTime time.Time
+	var deltaTokens int
+	var usagePromptTokens int
+	var usageCompletionTokens int
+
 	for {
 		line, err := reader.ReadString('\n')
 		if len(line) > 0 {
@@ -638,6 +666,14 @@ func (c *Client) consumeStream(body io.Reader, stats ChatStats, onDelta func(Str
 				return Message{}, stats, fmt.Errorf("decode response: %w", uerr)
 			}
 			stats.ServerTimings = out.Timings
+			if stats.ServerTimings == nil && out.Usage != nil && out.Usage.CompletionTokens > 0 && stats.Latency > 0 {
+				stats.ServerTimings = &ServerTimings{
+					PredictedN:         out.Usage.CompletionTokens,
+					PredictedMS:        float64(stats.Latency.Milliseconds()),
+					PredictedPerSecond: float64(out.Usage.CompletionTokens) / stats.Latency.Seconds(),
+					PromptN:            out.Usage.PromptTokens,
+				}
+			}
 			if len(out.Choices) == 0 {
 				return Message{}, stats, fmt.Errorf("model returned no choices")
 			}
@@ -660,19 +696,26 @@ func (c *Client) consumeStream(body io.Reader, stats ChatStats, onDelta func(Str
 				if chunk.Timings != nil {
 					stats.ServerTimings = chunk.Timings
 				}
+				if chunk.Usage != nil {
+					usagePromptTokens = chunk.Usage.PromptTokens
+					usageCompletionTokens = chunk.Usage.CompletionTokens
+				}
 				if len(chunk.Choices) > 0 {
 					ch := chunk.Choices[0]
 					if ch.Delta.Role != "" {
 						msg.Role = ch.Delta.Role
 					}
 					var delta StreamDelta
+					hasToken := false
 					if ch.Delta.ReasoningContent != "" {
 						msg.ReasoningContent += ch.Delta.ReasoningContent
 						delta.Reasoning = ch.Delta.ReasoningContent
+						hasToken = true
 					}
 					if ch.Delta.Content != "" {
 						msg.Content += ch.Delta.Content
 						delta.Content = ch.Delta.Content
+						hasToken = true
 					}
 					for _, tc := range ch.Delta.ToolCalls {
 						if tc.Index < 0 {
@@ -690,13 +733,23 @@ func (c *Client) consumeStream(body io.Reader, stats ChatStats, onDelta func(Str
 						}
 						if tc.Function.Name != "" {
 							dst.Function.Name += tc.Function.Name
+							hasToken = true
 						}
 						if tc.Function.Arguments != "" {
 							dst.Function.Arguments += tc.Function.Arguments
+							hasToken = true
 						}
 						if delta.ToolCall == nil {
 							delta.ToolCall = &StreamToolCallDelta{Index: tc.Index, ID: dst.ID, Name: tc.Function.Name, Arguments: tc.Function.Arguments}
 						}
+					}
+					if hasToken {
+						now := time.Now()
+						if firstTokenTime.IsZero() {
+							firstTokenTime = now
+						}
+						lastTokenTime = now
+						deltaTokens++
 					}
 					if ch.FinishReason != "" {
 						msg.FinishReason = ch.FinishReason
@@ -717,6 +770,27 @@ func (c *Client) consumeStream(body io.Reader, stats ChatStats, onDelta func(Str
 	}
 	if !sawDone && msg.FinishReason == "" && (len(msg.Content) > 0 || len(msg.ReasoningContent) > 0 || len(msg.ToolCalls) > 0) {
 		msg.FinishReason = "incomplete"
+	}
+	if stats.ServerTimings == nil {
+		tokens := usageCompletionTokens
+		if tokens <= 0 {
+			tokens = deltaTokens
+		}
+		var dur time.Duration
+		if !firstTokenTime.IsZero() && !lastTokenTime.IsZero() {
+			dur = lastTokenTime.Sub(firstTokenTime)
+		}
+		if dur <= 0 && stats.Latency > 0 {
+			dur = stats.Latency
+		}
+		if tokens > 0 && dur > 0 {
+			stats.ServerTimings = &ServerTimings{
+				PredictedN:         tokens,
+				PredictedMS:        float64(dur.Milliseconds()),
+				PredictedPerSecond: float64(tokens) / dur.Seconds(),
+				PromptN:            usagePromptTokens,
+			}
+		}
 	}
 	return msg, stats, nil
 }

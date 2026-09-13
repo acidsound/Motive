@@ -9,6 +9,7 @@ import (
 	"net/http/httptest"
 	"strings"
 	"testing"
+	"time"
 )
 
 func TestMessageAlwaysSerializesContent(t *testing.T) {
@@ -505,5 +506,39 @@ func TestChatStreamIncompleteStreamMarked(t *testing.T) {
 	}
 	if msg.FinishReason != "incomplete" {
 		t.Errorf("FinishReason = %q, want 'incomplete'", msg.FinishReason)
+	}
+}
+
+func TestChatStreamCalculatesTimingsWithoutServerTimings(t *testing.T) {
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Type", "text/event-stream")
+		flusher := w.(http.Flusher)
+		fmt.Fprint(w, "data: {\"choices\":[{\"delta\":{\"content\":\"Hello\"}}]}\n\n")
+		flusher.Flush()
+		time.Sleep(10 * time.Millisecond)
+		fmt.Fprint(w, "data: {\"choices\":[{\"delta\":{\"content\":\" world\"}}]}\n\n")
+		flusher.Flush()
+		fmt.Fprint(w, "data: {\"choices\":[],\"usage\":{\"prompt_tokens\":10,\"completion_tokens\":2,\"total_tokens\":12}}\n\n")
+		flusher.Flush()
+		fmt.Fprint(w, "data: [DONE]\n\n")
+	}))
+	defer srv.Close()
+
+	client := &Client{BaseURL: srv.URL, Model: "test", HTTP: http.DefaultClient}
+	_, stats, err := client.ChatStream(context.Background(), nil, nil, "low", nil)
+	if err != nil {
+		t.Fatalf("ChatStream: %v", err)
+	}
+	if stats.ServerTimings == nil {
+		t.Fatal("expected stats.ServerTimings to be calculated, got nil")
+	}
+	if stats.ServerTimings.PredictedN != 2 {
+		t.Errorf("PredictedN = %d, want 2", stats.ServerTimings.PredictedN)
+	}
+	if stats.ServerTimings.PromptN != 10 {
+		t.Errorf("PromptN = %d, want 10", stats.ServerTimings.PromptN)
+	}
+	if stats.ServerTimings.PredictedPerSecond <= 0 {
+		t.Errorf("PredictedPerSecond = %v, want > 0", stats.ServerTimings.PredictedPerSecond)
 	}
 }

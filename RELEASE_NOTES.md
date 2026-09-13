@@ -1,20 +1,13 @@
-## Motive v0.2.0
+## Motive v0.3.0
 
-Changes since v0.1.0:
+Changes since v0.2.0:
 
-### Reasoning Effort
-- Added support for reasoning-effort `"off"` in addition to low/medium/high
-- Hardened tool-call follow-ups: model messages that continue a tool sequence are now handled reliably, reducing dropped tool loops
+### Token Metrics
+- Added client-side tok/s estimation during streaming (no server timings required)
+- Request `stream_options.include_usage` to receive token usage from the model server
+- Fallback `ServerTimings` calculation from usage data when the server does not report timings
+- Live tok/s display in the TUI status bar updates as deltas arrive
 
-### Release Pipeline
-- Fixed checksum generation on the macOS CI runner (`shasum` instead of `sha256sum`)
-- Added installation guide to README
-
-### Documentation
-- Clarified Motive execution boundaries (what the runtime does and does not do)
-- Synced Korean design rationale
-
-### Housekeeping
-- Added a pre-commit hook for formatting/checks
-- Added a local request-dump proxy script for debugging
-- Ignored locally built `motive` binary in Git
+### Tests
+- Added test for client-side timing calculation from stream usage
+- Added test for live tok/s on streaming deltas

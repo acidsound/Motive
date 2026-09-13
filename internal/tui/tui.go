@@ -199,9 +199,11 @@ type model struct {
 	// Last observed model metrics for the status bar: tok/s and cache-hit
 	// rate from the most recent server timings, lastCtx the context size of
 	// the most recent request. cacheHit is -1 until the first observation.
-	tokPerSec float64
-	cacheHit  float64
-	lastCtx   int
+	tokPerSec    float64
+	cacheHit     float64
+	lastCtx      int
+	streamTokens int
+	streamStart  time.Time
 
 	overlay    overlayKind
 	list       list.Model
@@ -962,6 +964,8 @@ func (m *model) handleTrace(event runtime.TraceEvent) (tea.Model, tea.Cmd) {
 		if event.ContextTokens > 0 {
 			m.lastCtx = event.ContextTokens
 		}
+		m.streamTokens = 0
+		m.streamStart = time.Time{}
 		// A fresh model request: we are waiting for the first response bytes
 		// (prefill). The busy line shows the elapsed wait and the stop binding
 		// until a delta (or a terminal event) arrives.
@@ -999,6 +1003,15 @@ func (m *model) handleTrace(event runtime.TraceEvent) (tea.Model, tea.Cmd) {
 				m.phase = phaseReasoning
 				m.phaseStart = time.Now()
 				m.phaseElapsed = 0
+			}
+		}
+		if event.Text != "" || event.Reasoning != "" {
+			if m.streamStart.IsZero() {
+				m.streamStart = time.Now()
+			}
+			m.streamTokens++
+			if elapsed := time.Since(m.streamStart).Seconds(); elapsed >= 0.3 && m.streamTokens >= 2 {
+				m.tokPerSec = float64(m.streamTokens) / elapsed
 			}
 		}
 		last := m.assistantSlot()

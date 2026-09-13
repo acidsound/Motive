@@ -1196,3 +1196,24 @@ func TestPhaseElapsedUpdatesOnTick(t *testing.T) {
 		}
 	})
 }
+
+func TestLiveTokPerSecOnDeltas(t *testing.T) {
+	m := newTestModel()
+	m.handleTrace(runtime.TraceEvent{Kind: "model_start"})
+	if m.tokPerSec != 0 {
+		t.Fatalf("expected initial tokPerSec = 0, got %v", m.tokPerSec)
+	}
+
+	m.handleTrace(runtime.TraceEvent{Kind: "delta", Text: "tok1"})
+	// Simulate 1 second elapsed since stream start with 10 tokens
+	m.streamStart = time.Now().Add(-1 * time.Second)
+	m.streamTokens = 9
+	m.handleTrace(runtime.TraceEvent{Kind: "delta", Text: "tok10"})
+
+	if m.tokPerSec <= 0 {
+		t.Fatalf("expected tokPerSec > 0, got %v", m.tokPerSec)
+	}
+	if m.tokPerSec < 8 || m.tokPerSec > 12 {
+		t.Errorf("tokPerSec = %v, want approx 10", m.tokPerSec)
+	}
+}
