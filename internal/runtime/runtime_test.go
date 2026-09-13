@@ -375,6 +375,32 @@ func TestContextBlockEmptySessionID(t *testing.T) {
 	}
 }
 
+func TestContextBlockExtraSystemPrompt(t *testing.T) {
+	// A prompt passed after the -tui flag is injected into the system prompt
+	// for the whole session, so every turn carries the user's instructions.
+	r := &Runtime{
+		WS:                workspace.New(t.TempDir()),
+		ExtraSystemPrompt: "Always answer in Korean.",
+	}
+	block := r.ContextBlock()
+	if !strings.Contains(block, "Additional system instructions from the user:") {
+		t.Fatalf("context block should include the extra-instructions label:\n%s", block)
+	}
+	if !strings.Contains(block, "Always answer in Korean.") {
+		t.Fatalf("context block should include the extra prompt text:\n%s", block)
+	}
+
+	// Whitespace-only or empty extra prompt must not add the label.
+	r.ExtraSystemPrompt = "   "
+	if strings.Contains(r.ContextBlock(), "Additional system instructions from the user:") {
+		t.Fatalf("whitespace-only extra prompt should not add the label")
+	}
+	r.ExtraSystemPrompt = ""
+	if strings.Contains(r.ContextBlock(), "Additional system instructions from the user:") {
+		t.Fatalf("empty extra prompt should not add the label")
+	}
+}
+
 func TestTakeSteer(t *testing.T) {
 	rt := &Runtime{}
 	if s := rt.takeSteer(); s != "" {

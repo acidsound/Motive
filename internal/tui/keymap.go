@@ -30,6 +30,7 @@ type Keymap struct {
 	HistoryDown     Binding
 	Clear           Binding
 	Help            Binding
+	SysPromptToggle Binding
 }
 
 func DefaultKeymap() Keymap {
@@ -56,6 +57,7 @@ func DefaultKeymap() Keymap {
 		HistoryDown:     "down",
 		Clear:           "ctrl+l",
 		Help:            "ctrl+/",
+		SysPromptToggle: "alt+s",
 	}
 }
 
@@ -82,6 +84,7 @@ func (k *Keymap) ApplyEnv() {
 	k.HistoryDown = envBinding("MOTIVE_KEY_HISTORY_DOWN", k.HistoryDown)
 	k.Clear = envBinding("MOTIVE_KEY_CLEAR", k.Clear)
 	k.Help = envBinding("MOTIVE_KEY_HELP", k.Help)
+	k.SysPromptToggle = envBinding("MOTIVE_KEY_SYS_PROMPT_TOGGLE", k.SysPromptToggle)
 }
 
 func envBinding(name string, fallback Binding) Binding {

@@ -1217,3 +1217,100 @@ func TestLiveTokPerSecOnDeltas(t *testing.T) {
 		t.Errorf("tokPerSec = %v, want approx 10", m.tokPerSec)
 	}
 }
+
+func TestSysPromptLinesHiddenWithoutPrompt(t *testing.T) {
+	m := newTestModel()
+	if lines := m.sysPromptLines(80); lines != nil {
+		t.Errorf("sysPromptLines without ExtraSystemPrompt = %v, want nil", lines)
+	}
+}
+
+func TestSysPromptLinesCollapsedShowsOneLine(t *testing.T) {
+	m := newTestModel()
+	m.rt.ExtraSystemPrompt = "Always answer in Korean.\nBe concise."
+	lines := m.sysPromptLines(80)
+	if len(lines) != 1 {
+		t.Fatalf("collapsed sysPromptLines = %d lines, want 1", len(lines))
+	}
+	plain := ansi.Strip(lines[0])
+	if !strings.Contains(plain, "Always answer in Korean.") {
+		t.Errorf("collapsed line = %q, want it to contain the first line", plain)
+	}
+	if !strings.Contains(plain, "to expand") {
+		t.Errorf("collapsed line = %q, want expand hint", plain)
+	}
+}
+
+func TestSysPromptLinesExpandedShowsFull(t *testing.T) {
+	m := newTestModel()
+	m.rt.ExtraSystemPrompt = "Line one.\nLine two.\nLine three."
+	m.sysPromptExpanded = true
+	lines := m.sysPromptLines(80)
+	if len(lines) < 3 {
+		t.Fatalf("expanded sysPromptLines = %d lines, want >= 3", len(lines))
+	}
+	joined := strings.Join(lines, "\n")
+	plain := ansi.Strip(joined)
+	if !strings.Contains(plain, "Line one.") {
+		t.Errorf("expanded lines missing first line: %q", plain)
+	}
+	if !strings.Contains(plain, "Line three.") {
+		t.Errorf("expanded lines missing last line: %q", plain)
+	}
+	if !strings.Contains(plain, "to collapse") {
+		t.Errorf("expanded lines missing collapse hint: %q", plain)
+	}
+}
+
+func TestSysPromptToggleKeybinding(t *testing.T) {
+	m := newTestModel()
+	m.rt.ExtraSystemPrompt = "test prompt"
+	m.width = 80
+	m.height = 24
+
+	// Initially collapsed.
+	if m.sysPromptExpanded {
+		t.Fatal("sysPromptExpanded should start false")
+	}
+
+	// Simulate alt+s key press (Text empty so String() uses Keystroke()).
+	m2, _ := m.handleKey(tea.KeyPressMsg{Code: 's', Mod: tea.ModAlt})
+	m = *m2.(*model)
+	if !m.sysPromptExpanded {
+		t.Error("sysPromptExpanded should be true after toggle")
+	}
+	m2, _ = m.handleKey(tea.KeyPressMsg{Code: 's', Mod: tea.ModAlt})
+	m = *m2.(*model)
+	if m.sysPromptExpanded {
+		t.Error("sysPromptExpanded should be false after second toggle")
+	}
+}
+
+func TestSysPromptLinesTruncatesToWidth(t *testing.T) {
+	m := newTestModel()
+	m.rt.ExtraSystemPrompt = strings.Repeat("x", 200)
+	lines := m.sysPromptLines(40)
+	if len(lines) != 1 {
+		t.Fatalf("collapsed sysPromptLines = %d lines, want 1", len(lines))
+	}
+	plain := ansi.Strip(lines[0])
+	// The ⚙ prefix is 3 bytes but 1 display column, so allow a small
+	// overage in byte length vs display width.
+	if len(plain) > 44 {
+		t.Errorf("collapsed line byte length = %d, want <= 44", len(plain))
+	}
+}
+
+func TestSysPromptRenderedInView(t *testing.T) {
+	m := newTestModel()
+	m.rt.ExtraSystemPrompt = "My custom system prompt"
+	m.width = 80
+	m.height = 24
+	m.input.SetWidth(80)
+	m.syncInputHeight()
+
+	view := m.View()
+	if !strings.Contains(view.Content, "My custom system prompt") {
+		t.Error("View() should contain the system prompt text")
+	}
+}

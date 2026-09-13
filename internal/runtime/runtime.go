@@ -204,6 +204,10 @@ type Runtime struct {
 	// a failure look at what happened last and continue instead of restarting.
 	// When nil, the session_log tool reports that no log is available.
 	SessionLog func(sessionID string, lines int) (string, error)
+	// ExtraSystemPrompt is appended to the base system prompt for every turn.
+	// Set by the TUI when the user passes a prompt after the -tui flag, so the
+	// whole session runs with the user's standing instructions.
+	ExtraSystemPrompt string
 	// Steer receives user messages that are injected into a running execution
 	// at the next step boundary (after tool results, or instead of finishing).
 	// Set by the TUI; nil disables steering (one-shot CLI runs).
@@ -298,6 +302,10 @@ func (r *Runtime) ContextBlock() string {
 		b.WriteString("\nSession: ")
 		b.WriteString(r.SessionID)
 		b.WriteString("\nIf a previous run in this session was interrupted, call session_log to read the latest transcript entries and continue where it left off. Consult the motive tool for guidance on how to operate.")
+	}
+	if strings.TrimSpace(r.ExtraSystemPrompt) != "" {
+		b.WriteString("\n\nAdditional system instructions from the user:\n")
+		b.WriteString(strings.TrimSpace(r.ExtraSystemPrompt))
 	}
 	return b.String()
 }

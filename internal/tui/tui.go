@@ -229,7 +229,8 @@ type model struct {
 
 	helpOpen bool
 
-	toolsCollapsed bool
+	toolsCollapsed    bool
+	sysPromptExpanded bool
 
 	startPicker bool
 }
@@ -555,6 +556,12 @@ func (m *model) handleKey(msg tea.KeyPressMsg) (tea.Model, tea.Cmd) {
 
 	case string(m.keys.ToolsToggle):
 		m.toggleTools()
+		return m, nil
+
+	case string(m.keys.SysPromptToggle):
+		if m.rt != nil && strings.TrimSpace(m.rt.ExtraSystemPrompt) != "" {
+			m.sysPromptExpanded = !m.sysPromptExpanded
+		}
 		return m, nil
 
 	case string(m.keys.AttachFile):
@@ -1688,6 +1695,45 @@ func truncateRunes(s string, max int) string {
 	return string(r[:max]) + "…"
 }
 
+// sysPromptLines renders the system prompt display at the top of the TUI.
+// When collapsed (default), it shows a single truncated line with a hint to
+// expand. When expanded, it shows the full prompt wrapped to the terminal
+// width. Returns nil when no system prompt is set.
+func (m model) sysPromptLines(width int) []string {
+	if m.rt == nil || strings.TrimSpace(m.rt.ExtraSystemPrompt) == "" {
+		return nil
+	}
+	prompt := strings.TrimSpace(m.rt.ExtraSystemPrompt)
+	if !m.sysPromptExpanded {
+		// Collapsed: show the first line truncated to fit the width.
+		firstLine := prompt
+		if i := strings.IndexByte(prompt, '\n'); i >= 0 {
+			firstLine = prompt[:i]
+		}
+		label := "⚙ " + firstLine
+		if lipgloss.Width(label) > width {
+			label = truncateLeft(label, width)
+		}
+		hint := " (" + string(m.keys.SysPromptToggle) + " to expand)"
+		if lipgloss.Width(label)+lipgloss.Width(hint) > width {
+			// Truncate the prompt part to make room for the hint.
+			maxLabel := width - lipgloss.Width(hint)
+			if maxLabel < 4 {
+				maxLabel = 4
+			}
+			label = truncateLeft(label, maxLabel)
+		}
+		return []string{styleDim.Render(label + hint)}
+	}
+	// Expanded: show the full prompt wrapped, with a collapse hint at the end.
+	var lines []string
+	for _, l := range strings.Split(prompt, "\n") {
+		lines = append(lines, wrapStyled(styleDim.Render("  "+l), width)...)
+	}
+	lines = append(lines, styleDim.Render("  ("+string(m.keys.SysPromptToggle)+" to collapse)"))
+	return lines
+}
+
 // workspaceLine returns a dim-style line showing the current workspace root,
 // ready to render above the status bar. It returns "" when no workspace is
 // available (e.g. in tests). The home directory is abbreviated to ~ and
@@ -1829,6 +1875,9 @@ func (m model) statusLine() string {
 	if m.toolsCollapsed {
 		b.WriteString(" · tools⏷")
 	}
+	if m.sysPromptExpanded {
+		b.WriteString(" · sys⏸")
+	}
 	return styleStatus.Render(b.String())
 }
 
@@ -1933,6 +1982,11 @@ func (m *model) View() tea.View {
 	// cursor offset, otherwise the layout overflows the terminal.
 	wsLine := m.workspaceLine(width)
 	wsH := lineCount(wsLine)
+	// The system prompt line(s) render at the very top of the TUI, above the
+	// transcript. They are static chrome: subtracted from the transcript's
+	// available height and added to the cursor offset.
+	sysLines := m.sysPromptLines(width)
+	sysH := len(sysLines)
 	bodyW := width
 	if bodyW < 20 {
 		bodyW = 20
@@ -1947,7 +2001,7 @@ func (m *model) View() tea.View {
 		pre = append(pre, styleError.Render(m.notice))
 	}
 	pre = append(pre, attachmentLines(m.attachments, width)...)
-	avail := height - m.inputH - statusH - wsH - len(pre)
+	avail := height - m.inputH - statusH - wsH - sysH - len(pre)
 	if avail < 1 {
 		avail = 1
 	}
@@ -1983,6 +2037,10 @@ func (m *model) View() tea.View {
 	}
 
 	var b strings.Builder
+	for _, l := range sysLines {
+		b.WriteString(l)
+		b.WriteString("\n")
+	}
 	for _, l := range body {
 		b.WriteString(l)
 		b.WriteString("\n")
@@ -2002,7 +2060,7 @@ func (m *model) View() tea.View {
 	v := tea.NewView(b.String())
 	v.AltScreen = true
 	if cursor := m.input.Cursor(); cursor != nil {
-		cursor.Y += len(body) + wsH + statusH + len(pre)
+		cursor.Y += sysH + len(body) + wsH + statusH + len(pre)
 		v.Cursor = cursor
 	}
 	return v
@@ -2172,6 +2230,7 @@ func buildHelpRows(k Keymap) []helpRow {
 		{[]string{string(k.ModelPicker)}, "Model"},
 		{[]string{string(k.DiffToggle)}, "Git diff"},
 		{[]string{string(k.ToolsToggle)}, "Toggle tools"},
+		{[]string{string(k.SysPromptToggle)}, "Toggle system prompt"},
 		{[]string{string(k.AttachFile)}, "Attach file"},
 		{[]string{string(k.PasteImage)}, "Paste image"},
 		{[]string{string(k.Help), "alt+h"}, "Toggle help"},

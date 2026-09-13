@@ -92,6 +92,12 @@ func main() {
 	}
 
 	if *tuiMode || flag.NArg() == 0 {
+		// A prompt given after the -tui flag (as positional args) is injected
+		// into the system prompt for the whole TUI session, so every turn runs
+		// with the user's standing instructions.
+		if flag.NArg() > 0 {
+			rt.ExtraSystemPrompt = strings.Join(flag.Args(), " ")
+		}
 		if err := tui.Run(rt, cfg, sess, *resume); err != nil {
 			fmt.Fprintln(os.Stderr, err)
 			os.Exit(1)

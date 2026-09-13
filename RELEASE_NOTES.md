@@ -1,13 +1,16 @@
-## Motive v0.3.0
+## Motive v0.4.0
 
-Changes since v0.2.0:
+Changes since v0.3.0:
 
-### Token Metrics
-- Added client-side tok/s estimation during streaming (no server timings required)
-- Request `stream_options.include_usage` to receive token usage from the model server
-- Fallback `ServerTimings` calculation from usage data when the server does not report timings
-- Live tok/s display in the TUI status bar updates as deltas arrive
+### System Prompt (Standing Instructions)
+- Pass a prompt after the `-tui` flag to inject standing instructions into every turn of the TUI session
+- Example: `motive -tui "Always answer in Korean. Be concise."`
+- The prompt is displayed at the top of the TUI (collapsed by default, first line only)
+- Toggle full prompt visibility with `alt+s` (configurable via `MOTIVE_KEY_SYS_PROMPT_TOGGLE`)
+- Status bar shows `sys⏸` indicator when the prompt is expanded
 
 ### Tests
-- Added test for client-side timing calculation from stream usage
-- Added test for live tok/s on streaming deltas
+- Added tests for `ExtraSystemPrompt` in `ContextBlock()`
+- Added tests for system prompt line rendering (collapsed, expanded, truncation)
+- Added test for `alt+s` toggle keybinding
+- Added test verifying system prompt appears in `View()` output
