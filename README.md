@@ -208,7 +208,7 @@ models = ["deepseek-v4-pro", "gemma-4-31b"]
 api_key = ""                   # optional
 reasoning_effort = "medium"    # low | medium | high | xhigh | max | off (off omits the parameter entirely)
 temperature = 0.6              # sampling temperature; omit for the 0.6 default
-max_tokens = 0                 # response cap; 0 = no limit
+max_tokens = 0                 # response cap; 0 = default (8192), -1 = omit (no limit)
 ```
 
 `model` is the default id; `models` adds extra selectable ids. `temperature`
@@ -225,7 +225,7 @@ config file, the environment variables form a single "default" provider.
 | `MOTIVE_API_KEY` | `api_key` | — |
 | `MOTIVE_REASONING_EFFORT` | `reasoning_effort` | `low` |
 | `MOTIVE_TEMPERATURE` | `temperature` | `0.6` |
-| `MOTIVE_MAX_TOKENS` | `max_tokens` | `0` (no limit) |
+| `MOTIVE_MAX_TOKENS` | `max_tokens` | `8192` (default) |
 | `MOTIVE_HEADER_TIMEOUT` | — | `600` (10 min) |
 | `MOTIVE_WORKSPACE` | `workspace` | current directory |
 | `MOTIVE_STATE_DIR` | `state_dir` | `~/.motive` |
@@ -305,6 +305,7 @@ ctrl+\         cycle steer/queue (busy)  ctrl+/   toggle help
 ctrl+k / ctrl+j                         scroll up / down
 ctrl+shift+k / ctrl+shift+j             page up / down
 up / down      prompt history            alt+m    model picker
+alt+n          new session
 ctrl+l         clear input
 esc            stop run (busy) / close help
 ctrl+c         quit

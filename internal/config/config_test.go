@@ -439,3 +439,18 @@ func TestLoadBudgetDefaultsWhenNoFile(t *testing.T) {
 		t.Errorf("max_context_tokens = %d, want 0", cfg.MaxContextTokens)
 	}
 }
+
+func TestProviderEffectiveMaxTokens(t *testing.T) {
+	p := Provider{}
+	if got := p.EffectiveMaxTokens(); got != DefaultMaxTokens {
+		t.Errorf("EffectiveMaxTokens unset = %d, want %d", got, DefaultMaxTokens)
+	}
+	p.MaxTokens = 4096
+	if got := p.EffectiveMaxTokens(); got != 4096 {
+		t.Errorf("EffectiveMaxTokens positive = %d, want 4096", got)
+	}
+	p.MaxTokens = -1
+	if got := p.EffectiveMaxTokens(); got != 0 {
+		t.Errorf("EffectiveMaxTokens negative = %d, want 0", got)
+	}
+}

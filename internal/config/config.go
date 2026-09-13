@@ -19,6 +19,7 @@ const (
 	DefaultMaxSteps         = 64
 	DefaultMaxMinutes       = 30
 	DefaultMaxToolCalls     = 128
+	DefaultMaxTokens        = 8192
 	MaxAllowedSteps         = 256
 	MaxAllowedMinutes       = 120
 	MaxAllowedToolCalls     = 1024
@@ -36,7 +37,9 @@ type Provider struct {
 	// Temperature is a pointer so an explicit 0 is honored instead of being
 	// collapsed into the default; nil means "unset, use the Motive default".
 	Temperature *float64 `toml:"temperature"`
-	// MaxTokens of 0 means "no limit" (the request omits max_tokens).
+	// MaxTokens sets the maximum generation tokens. 0 means unset, in which case
+	// EffectiveMaxTokens applies DefaultMaxTokens (8192). A negative value (e.g. -1)
+	// explicitly omits max_tokens from the request.
 	MaxTokens int `toml:"max_tokens"`
 }
 
@@ -47,6 +50,20 @@ func (p *Provider) EffectiveTemperature() float64 {
 		return *p.Temperature
 	}
 	return 0.6
+}
+
+// EffectiveMaxTokens returns the provider's maximum output token limit.
+// When MaxTokens is 0 (unset), it returns DefaultMaxTokens (8192) so server
+// defaults (often 1024) do not choke reasoning models mid-generation.
+// A negative value explicitly omits max_tokens (returns 0).
+func (p *Provider) EffectiveMaxTokens() int {
+	if p.MaxTokens > 0 {
+		return p.MaxTokens
+	}
+	if p.MaxTokens < 0 {
+		return 0
+	}
+	return DefaultMaxTokens
 }
 
 // AllModels returns the provider's selectable model ids: the default model

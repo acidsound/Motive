@@ -399,3 +399,111 @@ func TestChatStreamPropagatesHTTPError(t *testing.T) {
 		t.Fatalf("err = %v, want 404", err)
 	}
 }
+
+func TestEffectiveMaxTokens(t *testing.T) {
+	c := &Client{}
+	if got := c.EffectiveMaxTokens(); got != DefaultMaxTokens {
+		t.Errorf("EffectiveMaxTokens unset = %d, want %d", got, DefaultMaxTokens)
+	}
+	c.MaxTokens = 2048
+	if got := c.EffectiveMaxTokens(); got != 2048 {
+		t.Errorf("EffectiveMaxTokens positive = %d, want 2048", got)
+	}
+	c.MaxTokens = -1
+	if got := c.EffectiveMaxTokens(); got != 0 {
+		t.Errorf("EffectiveMaxTokens negative = %d, want 0 (omitted)", got)
+	}
+}
+
+// TestRequestMaxTokensField verifies the max_tokens field actually sent in the
+// request body for the three EffectiveMaxTokens cases: unset (0) sends the
+// 8192 default so a server's low default (often 1024) cannot choke reasoning
+// mid-generation, a positive value is sent verbatim, and a negative value
+// (-1) omits the field entirely so the server applies its own limit.
+func TestRequestMaxTokensField(t *testing.T) {
+	cases := []struct {
+		name      string
+		maxTokens int
+		want      any // nil = field must be absent
+	}{
+		{"unset", 0, float64(DefaultMaxTokens)},
+		{"positive", 4096, float64(4096)},
+		{"omit", -1, nil},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			var gotBody map[string]any
+			srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+				data, _ := io.ReadAll(r.Body)
+				if err := json.Unmarshal(data, &gotBody); err != nil {
+					t.Fatalf("bad request body: %v", err)
+				}
+				w.Header().Set("Content-Type", "application/json")
+				fmt.Fprint(w, `{"choices":[{"message":{"role":"assistant","content":"ok"}}]}`)
+			}))
+			defer srv.Close()
+
+			client := &Client{BaseURL: srv.URL, Model: "test", MaxTokens: tc.maxTokens, HTTP: http.DefaultClient}
+			if _, _, err := client.ChatWithEffort(context.Background(), nil, nil, "low"); err != nil {
+				t.Fatalf("ChatWithEffort: %v", err)
+			}
+			got, present := gotBody["max_tokens"]
+			if tc.want == nil {
+				if present {
+					t.Fatalf("max_tokens present = %v, want omitted", got)
+				}
+				return
+			}
+			if !present {
+				t.Fatalf("max_tokens absent, want %v", tc.want)
+			}
+			if got != tc.want {
+				t.Errorf("max_tokens = %v, want %v", got, tc.want)
+			}
+		})
+	}
+}
+
+func TestChatStreamEOFWithoutTrailingNewline(t *testing.T) {
+	// The final chunk has NO trailing newline before EOF
+	payload := `data: {"choices":[{"delta":{"content":"final token"},"finish_reason":"stop"}]}`
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Type", "text/event-stream")
+		fmt.Fprint(w, payload) // no newline
+	}))
+	defer srv.Close()
+
+	client := &Client{BaseURL: srv.URL, Model: "test", HTTP: http.DefaultClient}
+	msg, _, err := client.ChatStream(context.Background(), nil, nil, "low", nil)
+	if err != nil {
+		t.Fatalf("ChatStream: %v", err)
+	}
+	if msg.Content != "final token" {
+		t.Errorf("Content = %q, want 'final token'", msg.Content)
+	}
+	if msg.FinishReason != "stop" {
+		t.Errorf("FinishReason = %q, want 'stop'", msg.FinishReason)
+	}
+}
+
+func TestChatStreamIncompleteStreamMarked(t *testing.T) {
+	// Stream closes abruptly without [DONE] and without finish_reason
+	payload := "data: {\"choices\":[{\"delta\":{\"content\":\"partial text\"}}]}\n\n"
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Type", "text/event-stream")
+		fmt.Fprint(w, payload)
+	}))
+	defer srv.Close()
+
+	client := &Client{BaseURL: srv.URL, Model: "test", HTTP: http.DefaultClient}
+	msg, _, err := client.ChatStream(context.Background(), nil, nil, "low", nil)
+	if err != nil {
+		t.Fatalf("ChatStream: %v", err)
+	}
+	if msg.Content != "partial text" {
+		t.Errorf("Content = %q, want 'partial text'", msg.Content)
+	}
+	if msg.FinishReason != "incomplete" {
+		t.Errorf("FinishReason = %q, want 'incomplete'", msg.FinishReason)
+	}
+}

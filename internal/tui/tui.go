@@ -876,11 +876,16 @@ func (m *model) finishTurn(done doneMsg) (tea.Model, tea.Cmd) {
 		// with the next queued turn, if any.
 		return m.nextQueued()
 	}
-	if text := strings.TrimSpace(done.text); text != "" && !m.lastAssistantActive() {
-		// Fill the assistant slot that submit() opened instead of appending
-		// a duplicate message.
+	if text := strings.TrimSpace(done.text); text != "" {
+		// Fill the assistant slot that submit() opened if live streaming
+		// did not already populate its content.
 		slot := m.assistantSlot()
-		slot.content = text
+		if strings.TrimSpace(slot.content) == "" {
+			if strings.TrimSpace(slot.reasoning) == text {
+				slot.reasoning = ""
+			}
+			slot.content = text
+		}
 	}
 	m.appendFull("execution_completed", nil, done.text, "", "")
 	m.saveAssistantEntry()
@@ -927,6 +932,9 @@ func (m *model) appendFull(kind string, event *runtime.TraceEvent, text, reasoni
 		}
 		if rec.Reasoning == "" {
 			rec.Reasoning = event.Reasoning
+		}
+		if event.FinishReason != "" {
+			rec.FinishReason = event.FinishReason
 		}
 		if rec.Error == "" && event.Error != nil {
 			rec.Error = event.Error.Error()

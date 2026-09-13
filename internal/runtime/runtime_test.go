@@ -2,6 +2,7 @@ package runtime
 
 import (
 	"context"
+	"encoding/json"
 	"fmt"
 	"io"
 	"net/http"
@@ -678,5 +679,269 @@ func TestExecuteRetriesNonStreamingWhenStreamedToolCallsLackIDs(t *testing.T) {
 	// 1 stream + 1 non-streaming retry + 1 final = 3 calls.
 	if callCount != 3 {
 		t.Fatalf("model calls = %d, want 3 (stream, retry, final)", callCount)
+	}
+}
+
+func TestExecuteFallbackToReasoningContent(t *testing.T) {
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Type", "application/json")
+		// Model returns empty content but has reasoning_content
+		fmt.Fprint(w, `{"choices":[{"message":{"role":"assistant","content":"","reasoning_content":"EXL3 is a quantization format."}}]}`)
+	}))
+	defer server.Close()
+
+	ws := workspace.New(t.TempDir())
+	rt := &Runtime{
+		Model: &model.Client{
+			BaseURL:         server.URL,
+			Model:           "test",
+			ReasoningEffort: "low",
+			HTTP:            server.Client(),
+		},
+		WS:       ws,
+		Exec:     &tools.Executor{WS: ws},
+		MaxSteps: 4,
+		Budget:   ExecutionBudget{MaxSteps: 4, MaxDuration: time.Minute, MaxToolCalls: 8},
+	}
+
+	out, err := rt.Execute(context.Background(), "what is exl3?")
+	if err != nil {
+		t.Fatalf("Execute: %v", err)
+	}
+	if out != "EXL3 is a quantization format." {
+		t.Fatalf("output = %q, want reasoning fallback", out)
+	}
+}
+
+func TestExecuteEmptyStreamRetriesNonStreaming(t *testing.T) {
+	callCount := 0
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		callCount++
+		body, _ := io.ReadAll(r.Body)
+		isStream := strings.Contains(string(body), `"stream":true`)
+		w.Header().Set("Content-Type", "application/json")
+		if callCount == 1 && isStream {
+			// First call: empty stream (premature [DONE])
+			w.Header().Set("Content-Type", "text/event-stream")
+			fmt.Fprint(w, "data: {\"choices\":[{\"delta\":{},\"finish_reason\":\"stop\"}]}\n\ndata: [DONE]\n\n")
+		} else {
+			// Non-streaming retry succeeds
+			fmt.Fprint(w, `{"choices":[{"message":{"role":"assistant","content":"stream recovery successful"}}]}`)
+		}
+	}))
+	defer server.Close()
+
+	ws := workspace.New(t.TempDir())
+	rt := &Runtime{
+		Model: &model.Client{
+			BaseURL:         server.URL,
+			Model:           "test",
+			ReasoningEffort: "low",
+			HTTP:            server.Client(),
+		},
+		WS:       ws,
+		Exec:     &tools.Executor{WS: ws},
+		MaxSteps: 4,
+		Budget:   ExecutionBudget{MaxSteps: 4, MaxDuration: time.Minute, MaxToolCalls: 8},
+		Stream:   true,
+	}
+
+	out, err := rt.Execute(context.Background(), "search and tell me")
+	if err != nil {
+		t.Fatalf("Execute: %v", err)
+	}
+	if out != "stream recovery successful" {
+		t.Fatalf("output = %q, want stream recovery successful", out)
+	}
+	if callCount != 2 {
+		t.Fatalf("callCount = %d, want 2 (stream + non-streaming retry)", callCount)
+	}
+}
+
+func TestExecuteEmptyResponseNudgesAndRecovers(t *testing.T) {
+	callCount := 0
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		callCount++
+		w.Header().Set("Content-Type", "application/json")
+		if callCount == 1 {
+			// First call: tool call
+			fmt.Fprint(w, `{"choices":[{"message":{"role":"assistant","content":"","tool_calls":[{"id":"call_1","type":"function","function":{"name":"read_file","arguments":"{\"path\":\"README.md\"}"}}]}}]}`)
+		} else if callCount == 2 {
+			// Second call: empty response
+			fmt.Fprint(w, `{"choices":[{"message":{"role":"assistant","content":""}}]}`)
+		} else {
+			// Third call: response after nudge
+			body, _ := io.ReadAll(r.Body)
+			if !strings.Contains(string(body), "Please provide your response") {
+				t.Errorf("expected nudge in messages body, got %s", string(body))
+			}
+			fmt.Fprint(w, `{"choices":[{"message":{"role":"assistant","content":"recovered after nudge"}}]}`)
+		}
+	}))
+	defer server.Close()
+
+	dir := t.TempDir()
+	ws := workspace.New(dir)
+	_ = ws.Write("README.md", "sample content\n")
+
+	rt := &Runtime{
+		Model: &model.Client{
+			BaseURL:         server.URL,
+			Model:           "test",
+			ReasoningEffort: "low",
+			HTTP:            server.Client(),
+		},
+		WS:       ws,
+		Exec:     &tools.Executor{WS: ws},
+		MaxSteps: 5,
+		Budget:   ExecutionBudget{MaxSteps: 5, MaxDuration: time.Minute, MaxToolCalls: 8},
+	}
+
+	out, err := rt.Execute(context.Background(), "read readme")
+	if err != nil {
+		t.Fatalf("Execute: %v", err)
+	}
+	if out != "recovered after nudge" {
+		t.Fatalf("output = %q, want recovered after nudge", out)
+	}
+	if callCount != 3 {
+		t.Fatalf("callCount = %d, want 3", callCount)
+	}
+}
+
+func TestExecuteEmptyResponsePreservesTrace(t *testing.T) {
+	callCount := 0
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		callCount++
+		w.Header().Set("Content-Type", "application/json")
+		if callCount == 1 {
+			// First call: produces initial answer in content + tool call
+			fmt.Fprint(w, `{"choices":[{"message":{"role":"assistant","content":"Initial partial answer","tool_calls":[{"id":"call_1","type":"function","function":{"name":"read_file","arguments":"{\"path\":\"README.md\"}"}}]}}]}`)
+		} else {
+			// Subsequent calls all return empty
+			fmt.Fprint(w, `{"choices":[{"message":{"role":"assistant","content":""}}]}`)
+		}
+	}))
+	defer server.Close()
+
+	dir := t.TempDir()
+	ws := workspace.New(dir)
+	_ = ws.Write("README.md", "sample content\n")
+
+	rt := &Runtime{
+		Model: &model.Client{
+			BaseURL:         server.URL,
+			Model:           "test",
+			ReasoningEffort: "low",
+			HTTP:            server.Client(),
+		},
+		WS:       ws,
+		Exec:     &tools.Executor{WS: ws},
+		MaxSteps: 4,
+		Budget:   ExecutionBudget{MaxSteps: 4, MaxDuration: time.Minute, MaxToolCalls: 8},
+	}
+
+	out, err := rt.Execute(context.Background(), "read readme")
+	if err != nil {
+		t.Fatalf("expected nil error when trace is preserved, got %v", err)
+	}
+	if !strings.Contains(out, "Initial partial answer") {
+		t.Fatalf("output = %q, want preserved trace", out)
+	}
+}
+
+func TestExecuteNoMidTurnSystemMessage(t *testing.T) {
+	callCount := 0
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		callCount++
+		body, _ := io.ReadAll(r.Body)
+		var req struct {
+			Messages []struct {
+				Role string `json:"role"`
+			} `json:"messages"`
+		}
+		_ = json.Unmarshal(body, &req)
+		for i, m := range req.Messages {
+			if i > 0 && m.Role == "system" {
+				http.Error(w, "500 Internal Server Error: mid-turn system message forbidden", http.StatusInternalServerError)
+				return
+			}
+		}
+		w.Header().Set("Content-Type", "application/json")
+		if callCount == 1 {
+			fmt.Fprint(w, `{"choices":[{"message":{"role":"assistant","content":"","tool_calls":[{"id":"call_1","type":"function","function":{"name":"read_file","arguments":"{\"path\":\"README.md\"}"}}]}}]}`)
+		} else {
+			fmt.Fprint(w, `{"choices":[{"message":{"role":"assistant","content":"tool follow-up succeeded"}}]}`)
+		}
+	}))
+	defer server.Close()
+
+	dir := t.TempDir()
+	ws := workspace.New(dir)
+	_ = ws.Write("README.md", "content\n")
+
+	rt := &Runtime{
+		Model: &model.Client{
+			BaseURL:         server.URL,
+			Model:           "test",
+			ReasoningEffort: "low",
+			HTTP:            server.Client(),
+		},
+		WS:       ws,
+		Exec:     &tools.Executor{WS: ws},
+		MaxSteps: 4,
+		Budget:   ExecutionBudget{MaxSteps: 4, MaxDuration: time.Minute, MaxToolCalls: 8},
+	}
+
+	out, err := rt.Execute(context.Background(), "read readme")
+	if err != nil {
+		t.Fatalf("Execute failed with mid-turn system message check: %v", err)
+	}
+	if out != "tool follow-up succeeded" {
+		t.Fatalf("output = %q, want tool follow-up succeeded", out)
+	}
+}
+
+func TestRuntimeContinuesOnTruncatedLengthResponse(t *testing.T) {
+	callCount := 0
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		callCount++
+		w.Header().Set("Content-Type", "text/event-stream")
+		if callCount == 1 {
+			// First call: truncated due to length limit
+			fmt.Fprint(w, "data: {\"choices\":[{\"delta\":{\"role\":\"assistant\",\"content\":\"Part 1 \"},\"finish_reason\":\"length\"}]}\n\ndata: [DONE]\n\n")
+		} else {
+			// Second call: continued to completion
+			fmt.Fprint(w, "data: {\"choices\":[{\"delta\":{\"role\":\"assistant\",\"content\":\"Part 2 completed\"},\"finish_reason\":\"stop\"}]}\n\ndata: [DONE]\n\n")
+		}
+	}))
+	defer server.Close()
+
+	dir := t.TempDir()
+	ws := workspace.New(dir)
+
+	rt := &Runtime{
+		Model: &model.Client{
+			BaseURL:         server.URL,
+			Model:           "test",
+			ReasoningEffort: "low",
+			HTTP:            server.Client(),
+		},
+		WS:       ws,
+		Exec:     &tools.Executor{WS: ws},
+		MaxSteps: 4,
+		Budget:   ExecutionBudget{MaxSteps: 4, MaxDuration: time.Minute, MaxToolCalls: 8},
+		Stream:   true,
+	}
+
+	out, err := rt.Execute(context.Background(), "write response")
+	if err != nil {
+		t.Fatalf("Execute: %v", err)
+	}
+	if !strings.Contains(out, "Part 1") || !strings.Contains(out, "Part 2 completed") {
+		t.Fatalf("output = %q, want containing Part 1 and Part 2 completed", out)
+	}
+	if callCount != 2 {
+		t.Fatalf("callCount = %d, want 2", callCount)
 	}
 }

@@ -274,13 +274,25 @@ func responseHeaderTimeout() time.Duration {
 	return time.Duration(n) * time.Second
 }
 
+const DefaultMaxTokens = 8192
+
+func (c *Client) EffectiveMaxTokens() int {
+	if c.MaxTokens > 0 {
+		return c.MaxTokens
+	}
+	if c.MaxTokens < 0 {
+		return 0
+	}
+	return DefaultMaxTokens
+}
+
 func NewFromEnv() *Client {
 	return &Client{
 		BaseURL:         strings.TrimRight(env("MOTIVE_BASE_URL", env("OPENAI_BASE_URL", "http://127.0.0.1:8080/v1")), "/"),
 		APIKey:          env("MOTIVE_API_KEY", env("OPENAI_API_KEY", "")),
 		Model:           env("MOTIVE_MODEL", env("OPENAI_MODEL", "Qwen3.8-27B")),
 		Temperature:     envFloat("MOTIVE_TEMPERATURE", envFloat("OPENAI_TEMPERATURE", 0.6)),
-		MaxTokens:       envInt("MOTIVE_MAX_TOKENS", envInt("OPENAI_MAX_TOKENS", 0)),
+		MaxTokens:       envInt("MOTIVE_MAX_TOKENS", envInt("OPENAI_MAX_TOKENS", DefaultMaxTokens)),
 		ReasoningEffort: normalizeEffort(env("MOTIVE_REASONING_EFFORT", "low")),
 		HTTP:            NewHTTPClient(),
 	}
@@ -492,7 +504,7 @@ func (c *Client) ChatWithEffort(ctx context.Context, messages []Message, tools [
 		Tools:              tools,
 		ToolChoice:         choice,
 		Temperature:        c.Temperature,
-		MaxTokens:          c.MaxTokens,
+		MaxTokens:          c.EffectiveMaxTokens(),
 		ReasoningEffort:    effortIfEnabled(effort),
 		ChatTemplateKwargs: kwargsIfEnabled(effort),
 	})
@@ -558,7 +570,7 @@ func (c *Client) ChatStream(ctx context.Context, messages []Message, tools []Too
 		Tools:              tools,
 		ToolChoice:         choice,
 		Temperature:        c.Temperature,
-		MaxTokens:          c.MaxTokens,
+		MaxTokens:          c.EffectiveMaxTokens(),
 		ReasoningEffort:    effortIfEnabled(effort),
 		ChatTemplateKwargs: kwargsIfEnabled(effort),
 		Stream:             true,
@@ -602,6 +614,7 @@ func (c *Client) consumeStream(body io.Reader, stats ChatStats, onDelta func(Str
 	msg := Message{Role: "assistant"}
 	reader := bufio.NewReader(body)
 	first := true
+	sawDone := false
 	for {
 		line, err := reader.ReadString('\n')
 		if len(line) > 0 {
@@ -635,74 +648,75 @@ func (c *Client) consumeStream(body io.Reader, stats ChatStats, onDelta func(Str
 			return out.Choices[0].Message, stats, nil
 		}
 		first = false
+
+		if trimmed != "" && strings.HasPrefix(trimmed, "data:") {
+			payload := strings.TrimSpace(strings.TrimPrefix(trimmed, "data:"))
+			if payload == "[DONE]" {
+				sawDone = true
+				break
+			}
+			var chunk streamChunk
+			if uerr := json.Unmarshal([]byte(payload), &chunk); uerr == nil {
+				if chunk.Timings != nil {
+					stats.ServerTimings = chunk.Timings
+				}
+				if len(chunk.Choices) > 0 {
+					ch := chunk.Choices[0]
+					if ch.Delta.Role != "" {
+						msg.Role = ch.Delta.Role
+					}
+					var delta StreamDelta
+					if ch.Delta.ReasoningContent != "" {
+						msg.ReasoningContent += ch.Delta.ReasoningContent
+						delta.Reasoning = ch.Delta.ReasoningContent
+					}
+					if ch.Delta.Content != "" {
+						msg.Content += ch.Delta.Content
+						delta.Content = ch.Delta.Content
+					}
+					for _, tc := range ch.Delta.ToolCalls {
+						if tc.Index < 0 {
+							tc.Index = 0
+						}
+						for len(msg.ToolCalls) <= tc.Index {
+							msg.ToolCalls = append(msg.ToolCalls, ToolCall{Type: "function"})
+						}
+						dst := &msg.ToolCalls[tc.Index]
+						if tc.ID != "" {
+							dst.ID = tc.ID
+						}
+						if tc.Type != "" {
+							dst.Type = tc.Type
+						}
+						if tc.Function.Name != "" {
+							dst.Function.Name += tc.Function.Name
+						}
+						if tc.Function.Arguments != "" {
+							dst.Function.Arguments += tc.Function.Arguments
+						}
+						if delta.ToolCall == nil {
+							delta.ToolCall = &StreamToolCallDelta{Index: tc.Index, ID: dst.ID, Name: tc.Function.Name, Arguments: tc.Function.Arguments}
+						}
+					}
+					if ch.FinishReason != "" {
+						msg.FinishReason = ch.FinishReason
+					}
+					if onDelta != nil && (delta.Content != "" || delta.Reasoning != "" || delta.ToolCall != nil) {
+						onDelta(delta)
+					}
+				}
+			}
+		}
+
 		if err == io.EOF {
 			break
 		}
 		if err != nil {
 			return Message{}, stats, fmt.Errorf("read stream: %w", err)
 		}
-		if trimmed == "" || !strings.HasPrefix(trimmed, "data:") {
-			continue
-		}
-		payload := strings.TrimSpace(strings.TrimPrefix(trimmed, "data:"))
-		if payload == "[DONE]" {
-			break
-		}
-		var chunk streamChunk
-		if uerr := json.Unmarshal([]byte(payload), &chunk); uerr != nil {
-			// Skip keep-alive comments or partial lines rather than failing the
-			// whole request; a conforming server only sends valid JSON chunks.
-			continue
-		}
-		if chunk.Timings != nil {
-			stats.ServerTimings = chunk.Timings
-		}
-		if len(chunk.Choices) == 0 {
-			continue
-		}
-		ch := chunk.Choices[0]
-		if ch.Delta.Role != "" {
-			msg.Role = ch.Delta.Role
-		}
-		var delta StreamDelta
-		if ch.Delta.ReasoningContent != "" {
-			msg.ReasoningContent += ch.Delta.ReasoningContent
-			delta.Reasoning = ch.Delta.ReasoningContent
-		}
-		if ch.Delta.Content != "" {
-			msg.Content += ch.Delta.Content
-			delta.Content = ch.Delta.Content
-		}
-		for _, tc := range ch.Delta.ToolCalls {
-			if tc.Index < 0 {
-				tc.Index = 0
-			}
-			for len(msg.ToolCalls) <= tc.Index {
-				msg.ToolCalls = append(msg.ToolCalls, ToolCall{Type: "function"})
-			}
-			dst := &msg.ToolCalls[tc.Index]
-			if tc.ID != "" {
-				dst.ID = tc.ID
-			}
-			if tc.Type != "" {
-				dst.Type = tc.Type
-			}
-			if tc.Function.Name != "" {
-				dst.Function.Name += tc.Function.Name
-			}
-			if tc.Function.Arguments != "" {
-				dst.Function.Arguments += tc.Function.Arguments
-			}
-			if delta.ToolCall == nil {
-				delta.ToolCall = &StreamToolCallDelta{Index: tc.Index, ID: dst.ID, Name: tc.Function.Name, Arguments: tc.Function.Arguments}
-			}
-		}
-		if ch.FinishReason != "" {
-			msg.FinishReason = ch.FinishReason
-		}
-		if onDelta != nil && (delta.Content != "" || delta.Reasoning != "" || delta.ToolCall != nil) {
-			onDelta(delta)
-		}
+	}
+	if !sawDone && msg.FinishReason == "" && (len(msg.Content) > 0 || len(msg.ReasoningContent) > 0 || len(msg.ToolCalls) > 0) {
+		msg.FinishReason = "incomplete"
 	}
 	return msg, stats, nil
 }

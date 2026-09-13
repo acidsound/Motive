@@ -34,6 +34,11 @@ func resultHead(s string) string {
 
 const systemPrompt = `You are Motive, a model-centric software execution runtime. Work directly on the user's workspace instead of merely describing code. Each user request is an independent execution request: do not assume unseen chat history. Inspect the workspace when needed, use tools decisively, make concrete file changes when asked, run tests or builds when useful, and report what actually happened. Prefer the smallest relevant context and avoid reading unrelated files. You may use shell, filesystem, web search, and git tools. When modifying the workspace, verify the resulting state before claiming success; never claim a commit, push, test, or build unless tool output confirms it. Each execution is budget-bounded: when you are near the step or tool budget, put a one-line statement of what remains and where to continue in your assistant message alongside your last tool call, so a budget cap does not lose your forward intent.`
 
+// maxEmptyNudges is the maximum number of consecutive empty model responses
+// tolerated before giving up. When a model returns no tool calls and no content,
+// the runtime prompts it to continue rather than immediately terminating.
+const maxEmptyNudges = 2
+
 type TraceEvent struct {
 	Kind                 string
 	Step                 int
@@ -61,6 +66,7 @@ type TraceEvent struct {
 	ServerPromptN        int
 	Text                 string
 	Reasoning            string
+	FinishReason         string
 	ToolResultLines      int
 	ToolResultHead       string
 	Error                error
@@ -376,6 +382,7 @@ func (r *Runtime) Execute(ctx context.Context, request string, attachments ...mo
 	r.emit(TraceEvent{Kind: "start", MaxSteps: budget.MaxSteps, MessageCount: len(messages), ContextTokens: ctxTokens, PeakContextTokens: ctxAcc.PeakRequest, MaxContextTokens: r.MaxContextTokens, ReasoningEffort: r.Model.GetReasoningEffort(), BaseRevision: baseRevision})
 	obs := Observation{}
 	effort := r.Model.GetReasoningEffort()
+	emptyNudges := 0
 
 	for step := 0; step < budget.MaxSteps; step++ {
 		if err := ctx.Err(); err != nil {
@@ -401,6 +408,13 @@ func (r *Runtime) Execute(ctx context.Context, request string, attachments ...mo
 				r.emit(TraceEvent{Kind: "model_start", Step: stepNumber, MaxSteps: budget.MaxSteps, MessageCount: len(messages), TotalToolCalls: obs.ToolCalls, ContextTokens: ctxTokens, PeakContextTokens: ctxAcc.PeakRequest, MaxContextTokens: r.MaxContextTokens, ReasoningEffort: effort, TotalElapsed: time.Since(started), Text: "[retry non-streaming: tool calls streamed without ids]"})
 				msg, stats, err = r.Model.ChatWithEffort(ctx, messages, toolDefs, effort)
 			}
+			// When a streaming response yields completely empty content, no reasoning,
+			// and no tool calls, some streaming gateways or dropped connections finish
+			// prematurely without streaming tokens. Retry non-streaming to recover.
+			if err == nil && len(msg.ToolCalls) == 0 && strings.TrimSpace(msg.Content) == "" && strings.TrimSpace(msg.ReasoningContent) == "" {
+				r.emit(TraceEvent{Kind: "model_start", Step: stepNumber, MaxSteps: budget.MaxSteps, MessageCount: len(messages), TotalToolCalls: obs.ToolCalls, ContextTokens: ctxTokens, PeakContextTokens: ctxAcc.PeakRequest, MaxContextTokens: r.MaxContextTokens, ReasoningEffort: effort, TotalElapsed: time.Since(started), Text: "[retry non-streaming: empty stream response]"})
+				msg, stats, err = r.Model.ChatWithEffort(ctx, messages, toolDefs, effort)
+			}
 		} else {
 			msg, stats, err = r.Model.ChatWithEffort(ctx, messages, toolDefs, effort)
 		}
@@ -417,26 +431,61 @@ func (r *Runtime) Execute(ctx context.Context, request string, attachments ...mo
 			obs.LastPredictedN = stats.ServerTimings.PredictedN
 			ctxAcc.ServerPromptN = stats.ServerTimings.PromptN
 		}
-		r.emit(TraceEvent{Kind: "model_end", Step: stepNumber, MaxSteps: budget.MaxSteps, MessageCount: len(messages), ToolCalls: len(msg.ToolCalls), TotalToolCalls: obs.ToolCalls, RequestBytes: stats.RequestBytes, EstimatedInputTokens: stats.EstimatedInputTokens, ResponseBytes: stats.ResponseBytes, Latency: stats.Latency, ServerTimings: stats.ServerTimings, ContextTokens: ctxTokens, PeakContextTokens: ctxAcc.PeakRequest, MaxContextTokens: r.MaxContextTokens, ServerPromptN: ctxAcc.ServerPromptN, ReasoningEffort: effort, TotalElapsed: time.Since(started)})
+		r.emit(TraceEvent{Kind: "model_end", Step: stepNumber, MaxSteps: budget.MaxSteps, MessageCount: len(messages), ToolCalls: len(msg.ToolCalls), TotalToolCalls: obs.ToolCalls, RequestBytes: stats.RequestBytes, EstimatedInputTokens: stats.EstimatedInputTokens, ResponseBytes: stats.ResponseBytes, Latency: stats.Latency, ServerTimings: stats.ServerTimings, ContextTokens: ctxTokens, PeakContextTokens: ctxAcc.PeakRequest, MaxContextTokens: r.MaxContextTokens, ServerPromptN: ctxAcc.ServerPromptN, ReasoningEffort: effort, TotalElapsed: time.Since(started), FinishReason: msg.FinishReason})
 		if msg.Role == "" {
 			msg.Role = "assistant"
 		}
-		messages = append(messages, msg)
-		if msg.Content != "" {
-			trace = append(trace, msg.Content)
-		}
 		if len(msg.ToolCalls) == 0 {
-			if msg.Content == "" {
+			// If content is empty but the model provided reasoning content,
+			// fallback to the reasoning content so the model's generated work
+			// is preserved and returned rather than treated as a fatal failure.
+			if strings.TrimSpace(msg.Content) == "" && strings.TrimSpace(msg.ReasoningContent) != "" {
+				msg.Content = strings.TrimSpace(msg.ReasoningContent)
+			}
+			if strings.TrimSpace(msg.Content) == "" {
+				if emptyNudges < maxEmptyNudges && step+1 < budget.MaxSteps {
+					emptyNudges++
+					r.emit(TraceEvent{Kind: "model_start", Step: stepNumber, MaxSteps: budget.MaxSteps, MessageCount: len(messages), TotalToolCalls: obs.ToolCalls, ContextTokens: ctxTokens, PeakContextTokens: ctxAcc.PeakRequest, MaxContextTokens: r.MaxContextTokens, ReasoningEffort: effort, TotalElapsed: time.Since(started), Text: "[nudge: model returned empty response, requesting continuation]"})
+					nudgeText := "Please provide your response to continue the task or answer the user's request based on the preceding context and tool results."
+					if obs.ToolCalls == 0 {
+						nudgeText = "Please provide your response to the user's request."
+					}
+					if len(messages) > 0 && messages[len(messages)-1].Role == "user" {
+						messages[len(messages)-1].Content += "\n\n" + nudgeText
+					} else {
+						messages = append(messages, model.Message{Role: "user", Content: nudgeText})
+					}
+					continue
+				}
+				if len(trace) > 0 {
+					return r.finish(TraceEvent{Kind: "finish", Step: stepNumber, MaxSteps: budget.MaxSteps, TotalToolCalls: obs.ToolCalls, MaxToolCalls: budget.MaxToolCalls, ToolFailures: obs.ToolFailures, ContextTokens: ctxAcc.LastRequest, PeakContextTokens: ctxAcc.PeakRequest, MaxContextTokens: r.MaxContextTokens, ServerPromptN: ctxAcc.ServerPromptN, TotalElapsed: time.Since(started), ReasoningEffort: effort, BaseRevision: baseRevision, ResultRevision: r.WS.GitHEAD()}, strings.Join(trace, "\n\n"), nil)
+				}
 				err := fmt.Errorf("model finished without a response")
 				return r.finish(TraceEvent{Kind: "finish", Step: stepNumber, MaxSteps: budget.MaxSteps, TotalToolCalls: obs.ToolCalls, MaxToolCalls: budget.MaxToolCalls, ToolFailures: obs.ToolFailures, ContextTokens: ctxAcc.LastRequest, PeakContextTokens: ctxAcc.PeakRequest, MaxContextTokens: r.MaxContextTokens, ServerPromptN: ctxAcc.ServerPromptN, TotalElapsed: time.Since(started), ReasoningEffort: effort, BaseRevision: baseRevision, ResultRevision: r.WS.GitHEAD(), Error: err}, strings.Join(trace, "\n\n"), err)
 			}
+			emptyNudges = 0
+			messages = append(messages, msg)
+			trace = append(trace, msg.Content)
 			// The user steered the run before it finished: append the steer as
 			// a user message and continue instead of returning.
 			if steer := r.takeSteer(); steer != "" {
 				messages = append(messages, model.Message{Role: "user", Content: steer})
 				continue
 			}
+			// When generation is cut off by token limits or incomplete stream,
+			// continue in the next step so the response is not left truncated mid-stream.
+			if (msg.FinishReason == "length" || msg.FinishReason == "incomplete") && step+1 < budget.MaxSteps {
+				r.emit(TraceEvent{Kind: "model_start", Step: stepNumber, MaxSteps: budget.MaxSteps, MessageCount: len(messages), TotalToolCalls: obs.ToolCalls, ContextTokens: ctxTokens, PeakContextTokens: ctxAcc.PeakRequest, MaxContextTokens: r.MaxContextTokens, ReasoningEffort: effort, TotalElapsed: time.Since(started), Text: "[continuation: response truncated by token limit, continuing...]"})
+				messages = append(messages, model.Message{Role: "user", Content: "Your previous response was cut off before completion. Please continue generating exactly from where you left off."})
+				continue
+			}
 			return r.finish(TraceEvent{Kind: "finish", Step: stepNumber, MaxSteps: budget.MaxSteps, TotalToolCalls: obs.ToolCalls, MaxToolCalls: budget.MaxToolCalls, ToolFailures: obs.ToolFailures, ContextTokens: ctxAcc.LastRequest, PeakContextTokens: ctxAcc.PeakRequest, MaxContextTokens: r.MaxContextTokens, ServerPromptN: ctxAcc.ServerPromptN, TotalElapsed: time.Since(started), ReasoningEffort: effort, BaseRevision: baseRevision, ResultRevision: r.WS.GitHEAD()}, strings.Join(trace, "\n\n"), nil)
+		}
+
+		emptyNudges = 0
+		messages = append(messages, msg)
+		if msg.Content != "" {
+			trace = append(trace, msg.Content)
 		}
 
 		toolFailed := false
@@ -489,10 +538,6 @@ func (r *Runtime) Execute(ctx context.Context, request string, attachments ...mo
 		obs.BaseRevision = baseRevision
 		obs.ResultRevision = r.WS.GitHEAD()
 
-		// Make runtime state visible to the model without requiring it to infer
-		// latency, failures, or remaining budget from tool output alone.
-		messages = append(messages, model.Message{Role: "system", Content: obs.context(stepNumber, budget, started, effort, baseRevision, r.WS.GitHEAD()) + "\n\n" + r.Observ.Context()})
-
 		// Observe the completed turn and adapt the next turn. Normal execution
 		// stays cheap; recovery after a tool failure gets one xhigh turn —
 		// unless reasoning effort is disabled (effort off), in which case the
@@ -504,8 +549,18 @@ func (r *Runtime) Execute(ctx context.Context, request string, attachments ...mo
 			effort = r.Model.GetReasoningEffort()
 		}
 
-		// Append the runtime observation so the model can see execution state.
-		messages = append(messages, model.Message{Role: "user", Content: obs.Format()})
+		// Append the runtime observation as a user message so the model can see
+		// execution state and diagnostics, along with explicit instruction to continue
+		// addressing the user's request. Mid-turn system messages are rejected by
+		// standard chat templates and OpenAI-compatible providers (resulting in 500s).
+		obsContent := obs.Format()
+		if r.Observ != nil {
+			if obsCtx := strings.TrimSpace(r.Observ.Context()); obsCtx != "" {
+				obsContent += "\n\n" + obsCtx
+			}
+		}
+		obsContent += "\n\nProceed with the task: answer the user's request using the tool results, or execute further tools if needed."
+		messages = append(messages, model.Message{Role: "user", Content: obsContent})
 
 		// Inject a steer that arrived while tools ran, so the next model call
 		// sees it right after the observation.
@@ -516,19 +571,6 @@ func (r *Runtime) Execute(ctx context.Context, request string, attachments ...mo
 
 	err := fmt.Errorf("execution budget exceeded: %d steps", budget.MaxSteps)
 	return r.finish(TraceEvent{Kind: "finish", Step: budget.MaxSteps, MaxSteps: budget.MaxSteps, TotalToolCalls: obs.ToolCalls, MaxToolCalls: budget.MaxToolCalls, ToolFailures: obs.ToolFailures, ContextTokens: ctxAcc.LastRequest, PeakContextTokens: ctxAcc.PeakRequest, MaxContextTokens: r.MaxContextTokens, ServerPromptN: ctxAcc.ServerPromptN, TotalElapsed: time.Since(started), ReasoningEffort: effort, BaseRevision: baseRevision, ResultRevision: r.WS.GitHEAD(), Error: err}, strings.Join(trace, "\n\n"), err)
-}
-
-func (o Observation) context(step int, budget ExecutionBudget, started time.Time, effort, baseRevision, resultRevision string) string {
-	remainingSteps := budget.MaxSteps - step
-	remainingTools := budget.MaxToolCalls - o.ToolCalls
-	if remainingSteps < 0 {
-		remainingSteps = 0
-	}
-	if remainingTools < 0 {
-		remainingTools = 0
-	}
-	return fmt.Sprintf("[motive self-observation]\nstep=%d/%d\nremaining_steps=%d\ntool_calls=%d/%d\ntool_failures=%d\nlast_tool_failed=%t\ncurrent_reasoning_effort=%s\nlast_model_latency=%s\nlast_predicted_tokens=%d\nlast_predicted_latency=%.0fms\nelapsed=%s\nremaining_time=%s\nbase_revision=%s\nresult_revision=%s",
-		step, budget.MaxSteps, remainingSteps, o.ToolCalls, budget.MaxToolCalls, o.ToolFailures, o.LastToolFailure, effort, o.LastModelLatency.Round(time.Millisecond), o.LastPredictedN, o.LastPredictedMS, time.Since(started).Round(time.Millisecond), maxDuration(0, budget.MaxDuration-time.Since(started)).Round(time.Second), shortRevision(baseRevision), shortRevision(resultRevision))
 }
 
 func maxDuration(a, b time.Duration) time.Duration {
