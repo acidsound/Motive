@@ -218,6 +218,9 @@ type model struct {
 	providerIdx  int
 	modelLoading bool
 	modelLoadErr string
+	// search is the model picker's type-ahead name search: typing narrows the
+	// list live without a mode-switch key.
+	search modelSearch
 
 	// attach is the file-attach overlay state; attachments holds the pending
 	// attachments for the next turn.
@@ -375,6 +378,7 @@ func newModel(rt *runtime.Runtime, cfg *config.Config, sess *session.Store, star
 		startPicker: startPicker,
 		cacheHit:    -1,
 	}
+	m.search = newModelSearch(80)
 	m.syncInputHeight()
 	return m
 }
@@ -444,6 +448,7 @@ func (m *model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			h := max(10, m.height-8)
 			if m.overlay == overlayModelPicker {
 				h = m.modelPickerListH()
+				m.syncSearchWidth()
 			}
 			m.list.SetSize(max(40, m.width-6), h)
 		}
@@ -459,7 +464,14 @@ func (m *model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 	if m.overlay == overlayAttach {
 		return m.updateAttach(msg)
 	}
-	if m.overlay == overlaySessionPicker || m.overlay == overlayModelPicker {
+	if m.overlay == overlayModelPicker {
+		// Non-key messages (cursor blink) belong to the search entry; the
+		// list itself only reacts to keys, which handleOverlayKey routes.
+		var cmd tea.Cmd
+		m.search.input, cmd = m.search.input.Update(msg)
+		return m, cmd
+	}
+	if m.overlay == overlaySessionPicker {
 		var cmd tea.Cmd
 		m.list, cmd = m.list.Update(msg)
 		return m, cmd
@@ -627,33 +639,18 @@ func (m *model) handleKey(msg tea.KeyPressMsg) (tea.Model, tea.Cmd) {
 }
 
 func (m *model) handleOverlayKey(msg tea.KeyPressMsg) (tea.Model, tea.Cmd) {
+	// The model picker has its own routing: its search box keeps focus, so
+	// printable keys are search text rather than list shortcuts.
+	if m.overlay == overlayModelPicker {
+		return m.handleModelPickerKey(msg)
+	}
 	key := msg.String()
 	if key == "esc" || key == "ctrl+c" {
-		if m.overlay == overlayModelPicker {
-			m.modelLoading = false
-			m.modelLoadErr = ""
-		}
 		m.overlay = overlayNone
 		return m, nil
 	}
 	switch m.overlay {
 	case overlaySessionPicker:
-		if key == string(m.keys.Run) {
-			return m.applyPickerSelection()
-		}
-		var cmd tea.Cmd
-		m.list, cmd = m.list.Update(msg)
-		return m, cmd
-
-	case overlayModelPicker:
-		// Provider tabs: left/right arrows and h/l move the active tab (with
-		// wraparound), refetching that provider's model list.
-		switch key {
-		case "left", "h":
-			return m, m.switchProvider(-1)
-		case "right", "l":
-			return m, m.switchProvider(1)
-		}
 		if key == string(m.keys.Run) {
 			return m.applyPickerSelection()
 		}
@@ -1113,12 +1110,14 @@ func (m *model) openPicker(kind overlayKind) {
 
 // openModelPickerCmd initializes the provider tabs and fetches the active
 // provider's model list asynchronously; the picker opens once the response
-// arrives.
+// arrives. The search box starts empty so a reopened picker never inherits a
+// stale filter.
 func (m *model) openModelPickerCmd() tea.Cmd {
 	m.providers = m.pickerProviders()
 	m.providerIdx = m.activeProviderIdx()
 	m.modelLoading = true
 	m.modelLoadErr = ""
+	m.search.reset()
 	return m.fetchProviderModels(m.providers[m.providerIdx], m.providerIdx)
 }
 
@@ -1179,7 +1178,9 @@ func (m *model) fetchProviderModels(p config.Provider, idx int) tea.Cmd {
 
 // switchProvider moves the active provider tab by delta (wrapping) and fetches
 // that provider's model list. The list is cleared while the fetch is in
-// flight so a stale provider's models are never shown under the new tab.
+// flight so a stale provider's models are never shown under the new tab. A
+// typed search query is kept: it is re-applied to the new tab's models when
+// they arrive, so tab-hunting while searching stays possible.
 func (m *model) switchProvider(delta int) tea.Cmd {
 	if len(m.providers) <= 1 {
 		return nil
@@ -1187,16 +1188,121 @@ func (m *model) switchProvider(delta int) tea.Cmd {
 	m.providerIdx = (m.providerIdx + delta + len(m.providers)) % len(m.providers)
 	m.modelLoading = true
 	m.modelLoadErr = ""
-	m.list = list.New(nil, list.NewDefaultDelegate(), max(40, m.width-6), m.modelPickerListH())
+	m.search.beginFetch()
+	m.setModelList()
 	return m.fetchProviderModels(m.providers[m.providerIdx], m.providerIdx)
 }
 
-// modelPickerListH sizes the model picker's list: the picker renders a title,
-// a provider tab row, an optional loading/error row, the list, and a hint row,
-// so it reserves more chrome rows than the session picker.
+// modelPickerListH sizes the model picker's list. The picker renders a title,
+// a provider tab row, the search row, the list, and a hint row — and either the
+// loading or the error line can appear between the search row and the list —
+// so six chrome rows are reserved in the worst case. The session picker, which
+// has none of that extra chrome, keeps the simpler budget.
 func (m *model) modelPickerListH() int {
-	h := max(4, m.height-10)
-	return h
+	return max(4, m.height-6)
+}
+
+// setModelList rebuilds the picker's list from the current search results.
+// Rebuilding (instead of filtering in place) is what makes the type-ahead
+// instant: the best-ranked match is always the highlighted row, so enter
+// applies it without the user touching the cursor.
+func (m *model) setModelList() {
+	m.syncSearchWidth()
+	l := list.New(m.search.shown, list.NewDefaultDelegate(), max(40, m.width-6), m.modelPickerListH())
+	l.Title = "Select model"
+	l.SetShowTitle(false)
+	l.SetShowStatusBar(false)
+	l.SetShowPagination(true)
+	// The picker's own hint row already lists the bindings, so the list's
+	// built-in help row would only duplicate it and eat a row of models.
+	l.SetShowHelp(false)
+	// The list's own "/"-filter is off: the picker's search row is always
+	// focused and does the same job without a mode switch.
+	l.SetFilteringEnabled(false)
+	l.DisableQuitKeybindings()
+	m.list = l
+}
+
+// syncSearchWidth sizes the search entry so the whole search row — indent,
+// magnifier, query, and the match-count suffix — fits one terminal line: the
+// text input pads its value to its width, so a too-wide entry would push the
+// suffix onto the next row.
+func (m *model) syncSearchWidth() {
+	m.search.input.SetWidth(max(8, m.width-24))
+}
+
+// closeModelPicker resets the picker's transient state so the next open starts
+// clean: no stale query, loading flag, or error.
+func (m *model) closeModelPicker() {
+	m.overlay = overlayNone
+	m.modelLoading = false
+	m.modelLoadErr = ""
+	m.search.blur()
+	m.search.reset()
+}
+
+// handleModelPickerKey routes keys while the model picker is open. The search
+// box keeps the focus, so any printable key is treated as a model name and
+// narrows the list live; only navigation, provider-tab, apply, and cancel keys
+// are taken away from the search text.
+func (m *model) handleModelPickerKey(msg tea.KeyPressMsg) (tea.Model, tea.Cmd) {
+	key := msg.String()
+	switch key {
+	case "ctrl+c":
+		m.closeModelPicker()
+		return m, nil
+	case "esc":
+		// While searching, esc first clears the query (back to the full list);
+		// it only closes the picker when nothing is typed.
+		if m.search.active() {
+			m.search.input.Reset()
+			m.search.apply()
+			m.setModelList()
+			return m, nil
+		}
+		m.closeModelPicker()
+		return m, nil
+	case "up", "down":
+		var cmd tea.Cmd
+		m.list, cmd = m.list.Update(msg)
+		return m, cmd
+	case "left":
+		return m, m.switchProvider(-1)
+	case "right":
+		return m, m.switchProvider(1)
+	case "enter", "tab":
+		// With a query that matches nothing there is nothing to apply: the
+		// picker stays open so the user can fix the name or back out.
+		if m.search.active() && m.search.count == 0 {
+			return m, nil
+		}
+		return m.applyPickerSelection()
+	}
+	// h and l are the provider-tab aliases, but only while the query is empty:
+	// once the user searches, they are ordinary model-name characters.
+	if !m.search.active() && (key == "h" || key == "l") {
+		delta := -1
+		if key == "l" {
+			delta = 1
+		}
+		return m, m.switchProvider(delta)
+	}
+	return m.typeModelSearch(msg)
+}
+
+// typeModelSearch feeds a key to the search entry and re-ranks the list. The
+// list is only rebuilt when the query actually changed, so cursor-editing keys
+// inside the query do not reset the selection.
+func (m *model) typeModelSearch(msg tea.KeyPressMsg) (tea.Model, tea.Cmd) {
+	before := m.search.input.Value()
+	var cmd tea.Cmd
+	m.search.input, cmd = m.search.input.Update(msg)
+	if m.search.input.Value() == before {
+		return m, cmd
+	}
+	m.search.apply()
+	m.setModelList()
+	return m, cmd
 }
 
 // openModelPicker opens (or refills) the model picker with the fetched model
@@ -1211,7 +1317,17 @@ func (m *model) openModelPicker(msg modelsMsg) (tea.Model, tea.Cmd) {
 	if msg.err != nil {
 		if m.overlay == overlayModelPicker {
 			m.modelLoadErr = msg.err.Error()
-			m.list = list.New(nil, list.NewDefaultDelegate(), max(40, m.width-6), m.modelPickerListH())
+			m.search.setItems(nil)
+			m.setModelList()
+		} else if len(m.providers) > 1 {
+			// The default provider is unreachable but other tabs exist: open
+			// the picker with the error shown so the user can switch to a
+			// working provider via left/right (or h/l).
+			m.modelLoadErr = msg.err.Error()
+			m.overlay = overlayModelPicker
+			m.search.setItems(nil)
+			m.setModelList()
+			return m, m.search.focus()
 		} else {
 			m.notice = "failed to load models: " + msg.err.Error()
 		}
@@ -1233,20 +1349,25 @@ func (m *model) openModelPicker(msg modelsMsg) (tea.Model, tea.Cmd) {
 	if len(items) == 0 {
 		if m.overlay == overlayModelPicker {
 			m.modelLoadErr = "no models available"
+			m.search.setItems(nil)
+			m.setModelList()
+		} else if len(m.providers) > 1 {
+			// No models from this provider but other tabs exist: open the
+			// picker so the user can switch to a provider that works.
+			m.modelLoadErr = "no models available"
+			m.overlay = overlayModelPicker
+			m.search.setItems(nil)
+			m.setModelList()
+			return m, m.search.focus()
 		} else {
 			m.notice = "no models available"
 		}
 		return m, nil
 	}
-	l := list.New(items, list.NewDefaultDelegate(), max(40, m.width-6), m.modelPickerListH())
-	l.Title = "Select model"
-	l.SetShowTitle(false)
-	l.SetShowStatusBar(false)
-	l.SetShowPagination(true)
-	l.SetFilteringEnabled(false)
-	m.list = l
+	m.search.setItems(items)
 	m.overlay = overlayModelPicker
-	return m, nil
+	m.setModelList()
+	return m, m.search.focus()
 }
 
 // applyProviderAndModel switches the live client to the active provider tab
@@ -1271,9 +1392,11 @@ func (m *model) applyProviderAndModel(modelID string) {
 
 func (m *model) applyPickerSelection() (tea.Model, tea.Cmd) {
 	item := m.list.SelectedItem()
-	m.overlay = overlayNone
-	m.modelLoading = false
-	m.modelLoadErr = ""
+	if m.overlay == overlayModelPicker {
+		m.closeModelPicker()
+	} else {
+		m.overlay = overlayNone
+	}
 	if item == nil {
 		return m, nil
 	}
@@ -2070,28 +2193,51 @@ func (m model) pickerView(width, height int) tea.View {
 	var b strings.Builder
 	b.WriteString(stylePanelHeading.Render(m.list.Title))
 	b.WriteString("\n")
+	rows := 1 // the heading above
+	cursorRow := -1
+	cursorCol := 0
 	if m.overlay == overlayModelPicker {
 		if tab := m.providerTabLine(width); tab != "" {
 			b.WriteString(tab)
 			b.WriteString("\n")
+			rows++
+		}
+		// The search row is always visible: the picker keeps the entry
+		// focused, so typing a model name right away searches the list.
+		searchRow := m.search.searchLine()
+		b.WriteString(searchRow)
+		b.WriteString("\n")
+		rows += lineCount(searchRow)
+		// The entry's own cursor reports its column inside the input view;
+		// shift it past the search prefix so it lands on the right cell.
+		if c := m.search.input.Cursor(); c != nil {
+			cursorCol = searchCursorOffset() + c.X
+			cursorRow = rows - 1 + c.Y
 		}
 		if m.modelLoading {
 			b.WriteString(styleDim.Render("  loading models…"))
 			b.WriteString("\n")
+			rows++
 		}
 		if m.modelLoadErr != "" {
 			b.WriteString(styleError.Render("  ✖ " + m.modelLoadErr))
 			b.WriteString("\n")
+			rows++
 		}
 	}
 	b.WriteString(m.list.View())
 	if m.overlay == overlayModelPicker {
-		b.WriteString(styleDim.Render("  ←/→ or h/l provider · ↑/↓ select · enter apply · esc close"))
+		b.WriteString(styleDim.Render("  type to search · ↑/↓ select · enter apply · ←/→ provider · esc close"))
 	} else {
 		b.WriteString(styleDim.Render("  ↑/↓ select · enter apply · esc close"))
 	}
 	v := tea.NewView(b.String())
 	v.AltScreen = true
+	if cursorRow >= 0 {
+		c := tea.NewCursor(cursorCol, cursorRow)
+		c.Shape = tea.CursorBar
+		v.Cursor = c
+	}
 	return v
 }
 
@@ -2227,7 +2373,7 @@ func buildHelpRows(k Keymap) []helpRow {
 		{[]string{string(k.CycleEffort)}, "Cycle effort"},
 		{[]string{string(k.SessionPicker)}, "Sessions"},
 		{[]string{string(k.NewSession)}, "New session"},
-		{[]string{string(k.ModelPicker)}, "Model"},
+		{[]string{string(k.ModelPicker)}, "Model (type to search)"},
 		{[]string{string(k.DiffToggle)}, "Git diff"},
 		{[]string{string(k.ToolsToggle)}, "Toggle tools"},
 		{[]string{string(k.SysPromptToggle)}, "Toggle system prompt"},

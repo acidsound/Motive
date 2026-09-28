@@ -311,6 +311,15 @@ esc            stop run (busy) / close help
 ctrl+c         quit
 ```
 
+`alt+m` opens the model picker with a search box already focused, so you can
+just start typing a model name — no filter mode to enter. The list narrows as
+you type and ranks matches (exact id, then prefix, substring, and finally
+subsequence), ignoring case and the `-`/`.`/`_` separators in model ids: `cso`
+finds `claude-sonnet-opus`, `35sonnet` finds `claude-3.5-sonnet`. The best
+match is highlighted, so `enter` applies it directly; `↑/↓` picks another,
+`←/→` switches provider tabs (the query survives and re-filters the new tab),
+and `esc` clears the query first, then closes.
+
 The `alt+e` effort cycle runs `low → medium → high → xhigh → max → off` and
 wraps back to `low`. `off` is the disabled state: requests then omit the
 `reasoning_effort` parameter entirely, for endpoints that reject it. The

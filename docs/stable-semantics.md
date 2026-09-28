@@ -123,6 +123,8 @@ Environment variables (`MOTIVE_BASE_URL`, `MOTIVE_MODEL`, `MOTIVE_API_KEY`, `MOT
 
 Without a config file, environment variables form a single implicit default provider. **[SOURCE]**
 
+The TUI's model picker (`alt+m`) lists the active provider's models — fetched from its `/models` endpoint, falling back to the provider's configured model list — across one tab per configured provider. The picker keeps a search entry focused, so typing a model name filters the list live without a mode-switch key; matching ignores case and the `-`/`.`/`_`/`/` separators in model ids, and ranks exact ids before prefixes, substrings, and subsequences. The highest-ranked match is pre-selected, so `enter` applies it directly. **[SOURCE][TEST]**
+
 The state directory for session storage defaults to `~/.motive` and is overridable with `MOTIVE_STATE_DIR`. **[SOURCE]**
 
 ## 8. Session persistence
