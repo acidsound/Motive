@@ -311,6 +311,28 @@ esc            stop run (busy) / close help
 ctrl+c         quit
 ```
 
+When a keybinding cannot reach the terminal (dumb terminals, tmux key
+collisions, remote terminals that swallow `alt`/`ctrl` chords), every action
+is also available as a slash command typed into the input box. Typing `/`
+lists the commands live above the input, and `tab` completes the word
+(`tab` still behaves normally outside a slash word):
+
+```text
+/effort [level]  set or cycle reasoning effort   /new       start a new session
+/steer           steer input while busy          /sessions  session picker
+/queue           queue input while busy          /models    model picker
+/diff            git diff view                   /attach    attach a file
+/system          toggle system prompt            /image     paste clipboard image
+/tools           toggle tool details             /help      toggle help panel
+/recovery        recover the last run            /quit      quit
+```
+
+Commands act on the spot and never reach the model as a prompt; guarded
+ones (`/new`, `/sessions`, …) report that a run is in progress instead.
+`//text` is the escape hatch that sends a literal message starting with a
+slash to the model. `/effort` without an argument cycles the same ladder as
+`alt+e`; with an argument it sets the level directly (`/effort high`).
+
 `alt+m` opens the model picker with a search box already focused, so you can
 just start typing a model name — no filter mode to enter. The list narrows as
 you type and ranks matches (exact id, then prefix, substring, and finally

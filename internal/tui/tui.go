@@ -630,6 +630,11 @@ func (m *model) handleKey(msg tea.KeyPressMsg) (tea.Model, tea.Cmd) {
 		m.input.Reset()
 		m.syncInputHeight()
 		return m, nil
+
+	case "tab":
+		// Tab completes slash commands typed in the input; outside a slash
+		// word it behaves exactly as before (passed to the textarea).
+		return m.completeSlash(msg)
 	}
 
 	var cmd tea.Cmd
@@ -689,8 +694,10 @@ func (m *model) submit() (tea.Model, tea.Cmd) {
 	m.input.Reset()
 	m.notice = ""
 	m.syncInputHeight()
-	if request == recoveryRequest {
-		return m.startTurn(recoveryBootstrap, nil)
+	// Slash commands are the keybindings' text-mode twin: they act on the
+	// spot without starting a turn (except /recovery, which starts one).
+	if strings.HasPrefix(request, "/") {
+		return m.runSlash(request)
 	}
 	return m.startTurn(request, m.attachments)
 }
@@ -1071,7 +1078,7 @@ func (m *model) lastAssistantActive() bool {
 
 func (m *model) cycleEffort() {
 	current := m.rt.Model.GetReasoningEffort()
-	order := []string{"low", "medium", "high", "xhigh", "max", "off"}
+	order := effortLevels
 	next := order[0]
 	for i, lvl := range order {
 		if lvl == current {
@@ -2123,6 +2130,9 @@ func (m *model) View() tea.View {
 	if m.notice != "" {
 		pre = append(pre, styleError.Render(m.notice))
 	}
+	// Live slash-command completion listing above the input while the user
+	// types "/...": the text-mode twin of the keybinding help.
+	pre = append(pre, m.slashHintLines()...)
 	pre = append(pre, attachmentLines(m.attachments, width)...)
 	avail := height - m.inputH - statusH - wsH - sysH - len(pre)
 	if avail < 1 {
@@ -2340,6 +2350,11 @@ func helpCols(rows []helpRow) (keyW, descW int) {
 // descriptions across two rows.
 func helpPanelWidth(k Keymap, width int) int {
 	keyW, descW := helpCols(buildHelpRows(k))
+	// The commands section shares the two columns: its key column holds
+	// "/name" words, so measure both row sets to size one consistent panel.
+	cKeyW, cDescW := helpCols(slashHelpRows())
+	keyW = max(keyW, cKeyW)
+	descW = max(descW, cDescW)
 	// Row = 2-space indent + key column + 2-space gap + desc column.
 	contentW := 2 + keyW + 2 + descW
 	w := contentW + 2 + 2 // +2 content margin (avoid exact-fit wrap) + 2 border
@@ -2391,12 +2406,18 @@ func buildHelpRows(k Keymap) []helpRow {
 	}
 }
 
-// buildHelpLines returns styled rows for the help box. An action bound to
-// several keys lists them as separate rows (one key per line) so every key
-// stays scannable in its own column.
+// buildHelpLines returns styled rows for the help box: the keybindings
+// section first, then the slash-command section — the text-mode fallback for
+// terminals where the key chords do not arrive. An action bound to several
+// keys lists them as separate rows (one key per line) so every key stays
+// scannable in its own column.
 func buildHelpLines(k Keymap) []string {
 	rows := buildHelpRows(k)
+	cmdRows := slashHelpRows()
 	keyW, descW := helpCols(rows)
+	cKeyW, cDescW := helpCols(cmdRows)
+	keyW = max(keyW, cKeyW)
+	descW = max(descW, cDescW)
 	keyStyle := lipgloss.NewStyle().Foreground(lipgloss.Color(colorPrompt)).Width(keyW)
 	descStyle := lipgloss.NewStyle().Foreground(lipgloss.Color(colorAssistant)).Width(descW)
 	out := []string{stylePanelHeading.Render("Keybindings")}
@@ -2408,6 +2429,10 @@ func buildHelpLines(k Keymap) []string {
 			}
 			out = append(out, "  "+keyStyle.Render(key)+"  "+descStyle.Render(desc))
 		}
+	}
+	out = append(out, "", stylePanelHeading.Render("Commands"))
+	for _, r := range cmdRows {
+		out = append(out, "  "+keyStyle.Render(r.keys[0])+"  "+descStyle.Render(r.desc))
 	}
 	return out
 }
