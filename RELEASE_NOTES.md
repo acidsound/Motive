@@ -1,3 +1,12 @@
+## Motive v0.6.1
+
+Changes since v0.6.0:
+
+### Fixes
+- Wide fenced-code blocks are now hard-wrapped across rows instead of being truncated with an ellipsis — every character stays visible and terminal-selectable, and leading indentation is preserved
+- Markdown blockquotes no longer overflow the screen width: the `▍` quote marker is now accounted for when wrapping
+- Markdown list items no longer overflow the screen width: the bullet indent is now accounted for when wrapping
+
 ## Motive v0.6.0
 
 Changes since v0.5.0:
