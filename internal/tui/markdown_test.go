@@ -53,6 +53,40 @@ func TestRenderMarkdownWrapsLongParagraphs(t *testing.T) {
 	}
 }
 
+func TestRenderMarkdownCodeWrapsInsteadOfTruncating(t *testing.T) {
+	// A code line wider than the view must hard-wrap across rows, not end in
+	// an ellipsis: the TUI offers no way to recover or copy a hidden tail, so
+	// truncation would destroy the content.
+	long := strings.Repeat("x", 100)
+	src := "```\n" + long + "\n```"
+	lines := renderMarkdown(src, 30)
+	joined := strings.Join(lines, "\n")
+	if strings.Contains(joined, "…") {
+		t.Fatalf("code line was truncated with an ellipsis:\n%s", joined)
+	}
+	// The wrapped tail must still be present and contiguous.
+	if !strings.Contains(joined, strings.Repeat("x", 10)) {
+		t.Fatalf("wrapped tail missing:\n%s", joined)
+	}
+	for i, l := range lines {
+		if w := lipgloss.Width(l); w > 30 {
+			t.Errorf("line %d width = %d, want <= 30: %q", i, w, l)
+		}
+	}
+}
+
+func TestRenderMarkdownQuoteStaysWithinWidth(t *testing.T) {
+	// The "▍ " quote marker is added after wrapping, so the wrapped text must
+	// account for it; otherwise every quote line overflows by two columns.
+	src := "> " + strings.Repeat("word ", 40)
+	lines := renderMarkdown(src, 30)
+	for i, l := range lines {
+		if w := lipgloss.Width(l); w > 30 {
+			t.Errorf("quote line %d width = %d, want <= 30: %q", i, w, l)
+		}
+	}
+}
+
 func TestColorizeDiff(t *testing.T) {
 	lines := colorizeDiff("diff --git a/x b/x\n--- a/x\n+++ b/x\n@@ -1,2 +1,2 @@\n-old\n+new\n context")
 	if len(lines) != 7 {
